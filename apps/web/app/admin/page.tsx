@@ -37,12 +37,24 @@ function raggruppaPerFase(regoleAlert: any[]): RegolaFase[] {
 export default async function AdminPage() {
   const supabase = creaSupabaseClientServer();
 
-  const [{ data: operatori }, { data: regoleAssegnazione }, { data: regoleAlert }, { data: importazioni }] = await Promise.all([
+  const [
+    { data: operatori, error: erroreOperatori },
+    { data: regoleAssegnazione, error: erroreRegoleAssegnazione },
+    { data: regoleAlert, error: erroreRegoleAlert },
+    { data: importazioni, error: erroreImportazioni },
+  ] = await Promise.all([
     supabase.from("utenti").select("*").order("cognome"),
     supabase.from("regole_assegnazione").select("*, utenti(nome, cognome)").order("priorita"),
     supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine)").eq("attiva", true),
     supabase.from("importazioni_csv").select("*").order("iniziata_il", { ascending: false }).limit(20),
   ]);
+
+  const erroriQuery = [
+    erroreOperatori && `utenti: ${erroreOperatori.message}`,
+    erroreRegoleAssegnazione && `regole_assegnazione: ${erroreRegoleAssegnazione.message}`,
+    erroreRegoleAlert && `regole_alert: ${erroreRegoleAlert.message}`,
+    erroreImportazioni && `importazioni_csv: ${erroreImportazioni.message}`,
+  ].filter(Boolean) as string[];
 
   const fasiConfigurabili = raggruppaPerFase(regoleAlert ?? []);
   const regoleGeneriche = (regoleAlert ?? []).filter((r: any) => !r.fase_id);
@@ -50,6 +62,15 @@ export default async function AdminPage() {
   return (
     <main className="p-6 space-y-8">
       <h1 className="text-2xl font-semibold">Pannello amministratore</h1>
+
+      {erroriQuery.length > 0 && (
+        <section className="bg-red-50 border border-red-300 rounded-xl p-4 text-sm text-red-800">
+          <p className="font-semibold mb-2">Errore nel leggere i dati da Supabase:</p>
+          <ul className="list-disc list-inside space-y-1">
+            {erroriQuery.map((e) => <li key={e}>{e}</li>)}
+          </ul>
+        </section>
+      )}
 
       <section className="bg-white rounded-xl shadow p-4">
         <h2 className="text-lg font-medium mb-3">Regole di assegnazione</h2>
