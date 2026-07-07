@@ -1,0 +1,67 @@
+// middleware.ts
+// Protezione delle rotte per ruolo. Gira prima di ogni richiesta (Edge runtime).
+//  - /admin, /dashboard-direzione: solo admin/responsabile
+//  - /dashboard-operatore, /pratiche: qualsiasi utente autenticato
+//  - /login/*, /api/*: sempre pubblici (le API hanno la propria autenticazione,
+//    es. service role key per import/cron, non le sessioni utente)
+import { NextResponse, type NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+
+const ROTTE_SOLO_ADMIN = ["/admin", "/dashboard-direzione"];
+const ROTTE_AUTENTICATE = ["/dashboard-operatore", "/pratiche"];
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  const pubblica =
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/_next") ||
+    pathname === "/favicon.ico";
+  if (pubblica) return NextResponse.next();
+
+  const richiedeSoloAdmin = ROTTE_SOLO_ADMIN.some((r) => pathname.startsWith(r));
+  const richiedeAutenticazione = richiedeSoloAdmin || ROTTE_AUTENTICATE.some((r) => pathname.startsWith(r));
+
+  if (!richiedeAutenticazione) return NextResponse.next();
+
+  let response = NextResponse.next({ request: { headers: request.headers } });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return request.cookies.get(name)?.value;
+        },
+        set(name: string, value: string, options: any) {
+          response.cookies.set({ name, value, ...options });
+        },
+        remove(name: string, options: any) {
+          response.cookies.set({ name, value: "", ...options });
+        },
+      },
+    }
+  );
+
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    const destinazioneLogin = richiedeSoloAdmin ? "/login/admin" : "/login/operatore";
+    return NextResponse.redirect(new URL(destinazioneLogin, request.url));
+  }
+
+  if (richiedeSoloAdmin) {
+    const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", user.id).maybeSingle();
+    if (!profilo || !["admin", "responsabile"].includes(profilo.ruolo)) {
+      return NextResponse.redirect(new URL("/dashboard-operatore", request.url));
+    }
+  }
+
+  return response;
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};

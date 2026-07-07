@@ -3,6 +3,8 @@
 import { creaSupabaseClientServer } from "@/lib/supabase/server";
 import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
+import { creaOperatore, creaAdmin, alternaAttivoUtente } from "./operatori-actions";
+import { creaRegolaAssegnazione, alternaAttivaRegola } from "./regole-actions";
 
 type RegolaFase = {
   fase_id: string;
@@ -74,8 +76,8 @@ export default async function AdminPage() {
 
       <section className="bg-white rounded-xl shadow p-4">
         <h2 className="text-lg font-medium mb-3">Regole di assegnazione</h2>
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th></tr></thead>
+        <table className="w-full text-sm mb-4">
+          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
           <tbody>
             {(regoleAssegnazione ?? []).map((r: any) => (
               <tr key={r.id} className="border-t">
@@ -85,11 +87,60 @@ export default async function AdminPage() {
                 <td>{r.utenti?.nome} {r.utenti?.cognome}</td>
                 <td>{r.priorita}</td>
                 <td>{r.attiva ? "Sì" : "No"}</td>
+                <td>
+                  <form action={alternaAttivaRegola}>
+                    <input type="hidden" name="id" value={r.id} />
+                    <input type="hidden" name="nuovo_stato" value={(!r.attiva).toString()} />
+                    <button type="submit" className="text-xs underline text-gray-500">
+                      {r.attiva ? "Disattiva" : "Riattiva"}
+                    </button>
+                  </form>
+                </td>
               </tr>
             ))}
+            {(regoleAssegnazione ?? []).length === 0 && (
+              <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
+            )}
           </tbody>
         </table>
-        <p className="text-xs text-gray-400 mt-2">Modificabile via form CRUD (componente client) — le modifiche si applicano immediatamente alle nuove pratiche.</p>
+
+        <details className="text-sm">
+          <summary className="cursor-pointer text-gray-600 font-medium">+ Aggiungi regola di assegnazione</summary>
+          <form action={creaRegolaAssegnazione} className="mt-3 grid gap-3 md:grid-cols-6 items-end max-w-3xl">
+            <label className="md:col-span-2">
+              <span className="block text-xs text-gray-500">Nome regola</span>
+              <input name="nome" required placeholder="Cognomi A-G" className="w-full border rounded px-2 py-1" />
+            </label>
+            <label>
+              <span className="block text-xs text-gray-500">Da lettera</span>
+              <input name="valore_da" required maxLength={1} placeholder="A" className="w-full border rounded px-2 py-1 uppercase" />
+            </label>
+            <label>
+              <span className="block text-xs text-gray-500">A lettera</span>
+              <input name="valore_a" required maxLength={1} placeholder="G" className="w-full border rounded px-2 py-1 uppercase" />
+            </label>
+            <label className="md:col-span-2">
+              <span className="block text-xs text-gray-500">Operatore</span>
+              <select name="operatore_id" required className="w-full border rounded px-2 py-1">
+                <option value="">-- seleziona --</option>
+                {(operatori ?? []).filter((u: any) => u.attivo).map((u: any) => (
+                  <option key={u.id} value={u.id}>{u.nome} {u.cognome} ({u.ruolo})</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="block text-xs text-gray-500">Priorità</span>
+              <input type="number" name="priorita" defaultValue={100} className="w-full border rounded px-2 py-1" />
+            </label>
+            <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5 md:col-span-1">
+              Crea regola
+            </button>
+          </form>
+        </details>
+        <p className="text-xs text-gray-400 mt-3">
+          Il criterio è sempre "iniziale del cognome del cliente": la pratica va all&apos;operatore la cui regola copre quella lettera.
+          Le modifiche si applicano immediatamente alle nuove pratiche.
+        </p>
       </section>
 
       <section className="bg-white rounded-xl shadow p-4">
@@ -195,19 +246,95 @@ export default async function AdminPage() {
 
       <section className="bg-white rounded-xl shadow p-4">
         <h2 className="text-lg font-medium mb-3">Operatori e utenti</h2>
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Email</th><th>Ruolo</th><th>Attivo</th></tr></thead>
+        <table className="w-full text-sm mb-4">
+          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Ruolo</th><th>Accesso</th><th>Attivo</th><th></th></tr></thead>
           <tbody>
             {(operatori ?? []).map((u: any) => (
               <tr key={u.id} className="border-t">
                 <td className="py-1">{u.nome} {u.cognome}</td>
-                <td>{u.email}</td>
                 <td>{u.ruolo}</td>
+                <td>
+                  {u.codice_accesso ? (
+                    <details>
+                      <summary className="cursor-pointer text-blue-700">mostra codice</summary>
+                      <span className="font-mono bg-gray-100 px-2 py-0.5 rounded">{u.codice_accesso}</span>
+                    </details>
+                  ) : (
+                    <span className="text-gray-500">{u.email}</span>
+                  )}
+                </td>
                 <td>{u.attivo ? "Sì" : "No"}</td>
+                <td>
+                  <form action={alternaAttivoUtente}>
+                    <input type="hidden" name="id" value={u.id} />
+                    <input type="hidden" name="nuovo_stato" value={(!u.attivo).toString()} />
+                    <button type="submit" className="text-xs underline text-gray-500">
+                      {u.attivo ? "Disattiva" : "Riattiva"}
+                    </button>
+                  </form>
+                </td>
               </tr>
             ))}
+            {(operatori ?? []).length === 0 && (
+              <tr><td colSpan={5} className="py-2 text-gray-400">Nessun utente creato ancora.</td></tr>
+            )}
           </tbody>
         </table>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <details className="text-sm border rounded-lg p-3" open>
+            <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo operatore (accesso con codice)</summary>
+            <form action={creaOperatore} className="mt-3 space-y-2">
+              <input type="hidden" name="ruolo" value="operatore" />
+              <label className="block">
+                <span className="block text-xs text-gray-500">Nome</span>
+                <input name="nome" required className="w-full border rounded px-2 py-1" />
+              </label>
+              <label className="block">
+                <span className="block text-xs text-gray-500">Cognome</span>
+                <input name="cognome" required className="w-full border rounded px-2 py-1" />
+              </label>
+              <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5">
+                Crea operatore
+              </button>
+              <p className="text-xs text-gray-400">
+                Genera un codice univoco (visibile dopo nella tabella sopra, "mostra codice") da consegnare all&apos;operatore: lo userà per accedere all&apos;app, senza bisogno di una sua email.
+              </p>
+            </form>
+          </details>
+
+          <details className="text-sm border rounded-lg p-3">
+            <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo admin/responsabile (accesso con email)</summary>
+            <form action={creaAdmin} className="mt-3 space-y-2">
+              <label className="block">
+                <span className="block text-xs text-gray-500">Ruolo</span>
+                <select name="ruolo" className="w-full border rounded px-2 py-1">
+                  <option value="admin">Admin</option>
+                  <option value="responsabile">Responsabile</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="block text-xs text-gray-500">Nome</span>
+                <input name="nome" required className="w-full border rounded px-2 py-1" />
+              </label>
+              <label className="block">
+                <span className="block text-xs text-gray-500">Cognome</span>
+                <input name="cognome" required className="w-full border rounded px-2 py-1" />
+              </label>
+              <label className="block">
+                <span className="block text-xs text-gray-500">Email</span>
+                <input type="email" name="email" required className="w-full border rounded px-2 py-1" />
+              </label>
+              <label className="block">
+                <span className="block text-xs text-gray-500">Password iniziale</span>
+                <input type="text" name="password" required minLength={6} className="w-full border rounded px-2 py-1" />
+              </label>
+              <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5">
+                Crea utente
+              </button>
+            </form>
+          </details>
+        </div>
       </section>
     </main>
   );
