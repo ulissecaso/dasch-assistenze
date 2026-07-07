@@ -72,14 +72,6 @@ export default async function AdminPage() {
         </section>
       )}
 
-      <section className="bg-yellow-50 border border-yellow-300 rounded-xl p-4 text-xs text-yellow-900 font-mono">
-        <p>DEBUG (da rimuovere): URL configurata = {process.env.NEXT_PUBLIC_SUPABASE_URL ?? "MANCANTE"}</p>
-        <p>DEBUG: righe utenti = {operatori === null ? "null (errore)" : operatori.length}</p>
-        <p>DEBUG: righe regole_assegnazione = {regoleAssegnazione === null ? "null (errore)" : regoleAssegnazione.length}</p>
-        <p>DEBUG: righe regole_alert = {regoleAlert === null ? "null (errore)" : regoleAlert.length}</p>
-        <p>DEBUG: righe importazioni_csv = {importazioni === null ? "null (errore)" : importazioni.length}</p>
-      </section>
-
       <section className="bg-white rounded-xl shadow p-4">
         <h2 className="text-lg font-medium mb-3">Regole di assegnazione</h2>
         <table className="w-full text-sm">
