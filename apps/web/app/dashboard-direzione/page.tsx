@@ -1,8 +1,9 @@
 // app/dashboard-direzione/page.tsx
 // Dashboard direzione: KPI aggregati, pratiche in ritardo, carico per operatore.
 import { creaSupabaseClientServer } from "@/lib/supabase/server";
+import { richiediAdmin } from "@/lib/auth/richiediUtente";
 
-export const revalidate = 60; // ISR leggero: ricalcola KPI ogni minuto
+export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
 async function caricaDatiDashboard() {
   const supabase = creaSupabaseClientServer();
@@ -18,6 +19,7 @@ async function caricaDatiDashboard() {
 }
 
 export default async function DashboardDirezionePage() {
+  await richiediAdmin();
   const { aperte, inRitardo, perOperatore, kpiTempi } = await caricaDatiDashboard();
 
   return (

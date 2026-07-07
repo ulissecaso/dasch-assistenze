@@ -65,6 +65,10 @@ export async function middleware(request: NextRequest) {
       }
     }
 
+    // Le pagine protette non vanno mai servite da cache (CDN/browser): sono
+    // specifiche per utente e già forzate a dynamic rendering lato pagina,
+    // ma questo header è una rete di sicurezza in più contro risposte stantie.
+    response.headers.set("Cache-Control", "no-store, must-revalidate");
     return response;
   } catch (err) {
     // Fail-closed: se il controllo di sessione fallisce per qualsiasi motivo

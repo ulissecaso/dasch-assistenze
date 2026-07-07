@@ -5,6 +5,9 @@ import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola } from "./regole-actions";
+import { richiediAdmin } from "@/lib/auth/richiediUtente";
+
+export const dynamic = "force-dynamic";
 
 type RegolaFase = {
   fase_id: string;
@@ -37,6 +40,7 @@ function raggruppaPerFase(regoleAlert: any[]): RegolaFase[] {
 }
 
 export default async function AdminPage() {
+  await richiediAdmin();
   const supabase = creaSupabaseClientServer();
 
   const [

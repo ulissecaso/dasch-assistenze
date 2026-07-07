@@ -1,15 +1,16 @@
 // app/dashboard-operatore/page.tsx
 // Dashboard operatore: pratiche assegnate, priorità, scadenze, alert del giorno.
-import { creaSupabaseClientServer } from "@/lib/supabase/server";
+import { richiediUtente } from "@/lib/auth/richiediUtente";
+
+export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
 export default async function DashboardOperatorePage() {
-  const supabase = creaSupabaseClientServer();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { supabase, user } = await richiediUtente();
 
   const { data: pratiche } = await supabase
     .from("pratiche")
     .select("id, codice_commissione, tipo, priorita, stato_generale, data_consegna_prevista, clienti(nome_completo)")
-    .eq("operatore_assegnato_id", user?.id)
+    .eq("operatore_assegnato_id", user.id)
     .not("stato_generale", "in", '("chiusa","annullata")')
     .order("priorita", { ascending: false })
     .order("data_consegna_prevista", { ascending: true });
@@ -17,7 +18,7 @@ export default async function DashboardOperatorePage() {
   const { data: notifiche } = await supabase
     .from("notifiche")
     .select("*")
-    .eq("utente_id", user?.id)
+    .eq("utente_id", user.id)
     .eq("letta", false)
     .order("created_at", { ascending: false })
     .limit(10);

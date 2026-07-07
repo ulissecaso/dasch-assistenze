@@ -1,10 +1,12 @@
 // app/pratiche/[id]/page.tsx
 // Schermata di dettaglio pratica: timeline fasi, righe/articoli, allegati, note, storico.
-import { creaSupabaseClientServer } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
+import { richiediUtente } from "@/lib/auth/richiediUtente";
+
+export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
 export default async function PraticaDettaglioPage({ params }: { params: { id: string } }) {
-  const supabase = creaSupabaseClientServer();
+  const { supabase } = await richiediUtente();
 
   const { data: pratica } = await supabase
     .from("pratiche")
