@@ -44,7 +44,14 @@ async function caricaDatiMonitor() {
   const righe = (faseRitardo ?? []).filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale));
 
   const oggi = oggiIso();
-  const alertRows: AlertRigaMonitor[] = righe.map((r: any) => {
+  const RANGO_LIVELLO = { critica: 0, alta: 1, media: 2, bassa: 3 } as const;
+  const righeOrdinate = [...righe].sort((a: any, b: any) => {
+    const rangoA = RANGO_LIVELLO[livelloMonitor(a.pratiche.priorita)];
+    const rangoB = RANGO_LIVELLO[livelloMonitor(b.pratiche.priorita)];
+    if (rangoA !== rangoB) return rangoA - rangoB;
+    return a.data_prevista.localeCompare(b.data_prevista);
+  });
+  const alertRows: AlertRigaMonitor[] = righeOrdinate.map((r: any) => {
     const p = r.pratiche;
     const fw = r.fasi_workflow;
     const { data, ora } = formattaScadenza(r.data_prevista);
@@ -99,12 +106,13 @@ export default async function DashboardDirezionePage() {
   const { alertRows, operatori, stats } = await caricaDatiMonitor();
 
   return (
-    <div className="p-4">
+    <div className="h-screen overflow-hidden p-3">
       <MonitorBoard
         titolo={<>MONITORAGGIO<br />ASSISTENZE</>}
         operatori={operatori}
         alertRows={alertRows}
         stats={stats}
+        righeMax={10}
       />
     </div>
   );

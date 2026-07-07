@@ -42,7 +42,15 @@ export default async function DashboardOperatorePage() {
   const opColore = coloreOperatore(user.id, profilo?.colore_badge);
   const opNome = profilo ? `${profilo.nome} ${profilo.cognome}` : "Operatore";
 
-  const alertRows: AlertRigaMonitor[] = righe.map((r: any) => {
+  const RANGO_LIVELLO = { critica: 0, alta: 1, media: 2, bassa: 3 } as const;
+  const righeOrdinate = [...righe].sort((a: any, b: any) => {
+    const rangoA = RANGO_LIVELLO[livelloMonitor(a.pratiche.priorita)];
+    const rangoB = RANGO_LIVELLO[livelloMonitor(b.pratiche.priorita)];
+    if (rangoA !== rangoB) return rangoA - rangoB;
+    return a.data_prevista.localeCompare(b.data_prevista);
+  });
+
+  const alertRows: AlertRigaMonitor[] = righeOrdinate.map((r: any) => {
     const p = r.pratiche;
     const fw = r.fasi_workflow;
     const { data, ora } = formattaScadenza(r.data_prevista);
@@ -74,7 +82,7 @@ export default async function DashboardOperatorePage() {
   const inScadenzaOggi = righe.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
   return (
-    <div className="p-4">
+    <div className="h-screen overflow-hidden p-3">
       <MonitorBoard
         titolo={<>LE MIE<br />PRATICHE</>}
         operatori={operatori}
@@ -89,6 +97,7 @@ export default async function DashboardOperatorePage() {
         }}
         messaggioVuoto="Nessuna pratica in ritardo al momento: sei in linea con tutte le scadenze."
         mostraSelettoreSchermoIntero={false}
+        righeMax={10}
       />
     </div>
   );
