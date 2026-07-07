@@ -1,5 +1,6 @@
 import "./globals.css";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { creaSupabaseClientServer } from "@/lib/supabase/server";
 
 export const metadata = {
@@ -8,6 +9,23 @@ export const metadata = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Le rotte /monitor/* sono la vista pubblica per il monitor a parete:
+  // niente sidebar, niente link verso login/admin, niente lettura di sessione
+  // utente. Il pathname arriva dall'header impostato in middleware.ts perché
+  // i layout non ricevono la rotta corrente come prop.
+  const pathname = headers().get("x-pathname") ?? "";
+  const isMonitorPubblico = pathname.startsWith("/monitor");
+
+  if (isMonitorPubblico) {
+    return (
+      <html lang="it">
+        <body className="bg-gray-50 text-gray-900" style={{ margin: 0 }}>
+          {children}
+        </body>
+      </html>
+    );
+  }
+
   const supabase = creaSupabaseClientServer();
   const { data: { user } } = await supabase.auth.getUser();
 

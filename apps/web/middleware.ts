@@ -2,13 +2,23 @@
 // Protezione delle rotte per ruolo. Gira prima di ogni richiesta (Edge runtime).
 //  - /admin, /dashboard-direzione: solo admin/responsabile
 //  - /dashboard-operatore, /pratiche: qualsiasi utente autenticato
-//  - /login/*, /api/*: sempre pubblici (le API hanno la propria autenticazione,
-//    es. service role key per import/cron, non le sessioni utente)
+//  - /login/*, /api/*, /monitor/*: sempre pubblici. /monitor/* è la vista di
+//    sola lettura per il monitor a parete: NON deve mai passare da una
+//    sessione admin (si autentica con una chiave nell'URL, controllata
+//    dentro la pagina stessa), così il PC collegato al monitor non ha mai
+//    accesso privilegiato al resto del portale.
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 const ROTTE_SOLO_ADMIN = ["/admin", "/dashboard-direzione"];
 const ROTTE_AUTENTICATE = ["/dashboard-operatore", "/pratiche"];
+
+// Propaga il pathname come header interno: serve al layout radice per
+// capire se è una rotta /monitor/* (nessuna sidebar/nav in quel caso).
+function conPathname(request: NextRequest, response: NextResponse) {
+  response.headers.set("x-pathname", request.nextUrl.pathname);
+  return response;
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -16,16 +26,17 @@ export async function middleware(request: NextRequest) {
   const pubblica =
     pathname.startsWith("/login") ||
     pathname.startsWith("/api") ||
+    pathname.startsWith("/monitor") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico";
-  if (pubblica) return NextResponse.next();
+  if (pubblica) return conPathname(request, NextResponse.next());
 
   const richiedeSoloAdmin = ROTTE_SOLO_ADMIN.some((r) => pathname.startsWith(r));
   const richiedeAutenticazione = richiedeSoloAdmin || ROTTE_AUTENTICATE.some((r) => pathname.startsWith(r));
 
-  if (!richiedeAutenticazione) return NextResponse.next();
+  if (!richiedeAutenticazione) return conPathname(request, NextResponse.next());
 
-  let response = NextResponse.next({ request: { headers: request.headers } });
+  let response = conPathname(request, NextResponse.next({ request: { headers: request.headers } }));
   const destinazioneLogin = richiedeSoloAdmin ? "/login/admin" : "/login/operatore";
 
   try {
