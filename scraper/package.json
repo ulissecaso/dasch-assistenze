@@ -1,0 +1,13 @@
+{
+  "name": "dasch-scraper-gestionale",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scraper opzionale per il download automatico del CSV dal portale del gestionale (solo se non è disponibile un export via email/API)",
+  "scripts": {
+    "download": "node downloadCsvGestionale.mjs",
+    "pipeline": "node downloadCsvGestionale.mjs && node ../scripts/import-csv/importVamartCsv.mjs ./downloads/ultimo.csv"
+  },
+  "dependencies": {
+    "playwright": "^1.47.0"
+  }
+}

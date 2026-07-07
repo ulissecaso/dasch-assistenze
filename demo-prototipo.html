@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>Dasch Gestione Assistenze — Prototipo</title>
+<style>
+  :root{
+    --bg:#f8fafc; --card:#ffffff; --border:#e5e7eb; --text:#111827; --muted:#6b7280;
+    --blue:#2563eb; --blue-bg:#eff6ff; --red:#dc2626; --red-bg:#fef2f2;
+    --amber:#d97706; --amber-bg:#fffbeb; --green:#16a34a; --green-bg:#f0fdf4;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  .app{display:flex;min-height:100vh;}
+  nav{width:220px;background:var(--card);border-right:1px solid var(--border);padding:16px;flex-shrink:0;}
+  nav .brand{font-weight:700;margin-bottom:20px;font-size:15px;}
+  nav .brand small{display:block;font-weight:400;color:var(--muted);font-size:11px;margin-top:2px;}
+  nav button{display:block;width:100%;text-align:left;background:none;border:none;padding:9px 10px;border-radius:8px;
+    font-size:14px;color:#374151;cursor:pointer;margin-bottom:4px;}
+  nav button:hover{background:#f3f4f6;}
+  nav button.active{background:var(--blue-bg);color:var(--blue);font-weight:600;}
+  main{flex:1;padding:28px;max-width:1180px;}
+  h1{font-size:22px;margin:0 0 20px;}
+  h2{font-size:16px;margin:0 0 14px;}
+  .grid{display:grid;gap:16px;margin-bottom:20px;}
+  .grid.kpi{grid-template-columns:repeat(4,1fr);}
+  .grid.split{grid-template-columns:2fr 1fr;align-items:start;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  .card.alert{background:var(--red-bg);border-color:#fecaca;}
+  .kpi-label{font-size:12.5px;color:var(--muted);margin-bottom:6px;}
+  .kpi-value{font-size:28px;font-weight:700;}
+  .kpi-value.danger{color:var(--red);}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  th{text-align:left;color:var(--muted);font-weight:500;padding:6px 8px;border-bottom:1px solid var(--border);}
+  td{padding:8px;border-bottom:1px solid #f1f5f9;}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;}
+  .badge.urgente{background:var(--red-bg);color:var(--red);}
+  .badge.alta{background:var(--amber-bg);color:var(--amber);}
+  .badge.normale{background:#f3f4f6;color:#4b5563;}
+  .badge.ok{background:var(--green-bg);color:var(--green);}
+  .badge.info{background:var(--blue-bg);color:var(--blue);}
+  .pratica-row{border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;
+    align-items:center;margin-bottom:10px;cursor:pointer;transition:box-shadow .15s;}
+  .pratica-row:hover{box-shadow:0 2px 8px rgba(0,0,0,.06);}
+  .pratica-row .titolo{font-weight:600;font-size:14px;}
+  .pratica-row .sub{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .notif{padding:8px 10px;border-radius:8px;font-size:13px;margin-bottom:8px;}
+  .notif.esc{background:var(--red-bg);color:var(--red);}
+  .notif.alert{background:var(--amber-bg);color:var(--amber);}
+  .timeline{list-style:none;padding:0;margin:0;position:relative;}
+  .timeline li{position:relative;padding-left:24px;padding-bottom:20px;}
+  .timeline li:before{content:"";position:absolute;left:5px;top:2px;width:11px;height:11px;border-radius:50%;background:#d1d5db;}
+  .timeline li.done:before{background:var(--green);}
+  .timeline li.progress:before{background:var(--blue);}
+  .timeline li:after{content:"";position:absolute;left:10px;top:14px;bottom:0;width:1px;background:var(--border);}
+  .timeline li:last-child:after{display:none;}
+  .timeline .fase-nome{font-weight:600;font-size:14px;}
+  .timeline .fase-info{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .tag{font-size:11px;color:var(--muted);}
+  section{display:none;}
+  section.active{display:block;}
+  .banner{background:#111827;color:#fff;font-size:12.5px;padding:8px 14px;border-radius:10px;margin-bottom:18px;}
+  .btn{background:var(--blue);color:#fff;border:none;padding:7px 14px;border-radius:8px;font-size:13px;cursor:pointer;}
+  .row-actions{display:flex;gap:8px;}
+  .muted{color:var(--muted);}
+
+  /* ===== MONITOR ALERT (dashboard direzione — dark, con modalita' schermo intero) ===== */
+  .app.kiosk nav{display:none;}
+  .app.kiosk main{max-width:none;padding:0;}
+  .monitor-board{background:#0a0e16;color:#e5e7eb;padding:22px 28px;font-family:inherit;border-radius:16px;}
+  .app.kiosk .monitor-board{border-radius:0;min-height:100vh;}
+  /* barra superiore: bottone schermo intero a sx, data/ora a dx, riga a se stante */
+  .monitor-board .mon-topbar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;}
+  .monitor-board .mon-exit{background:#1a2130;color:#9ca3af;border:1px solid #2a3242;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;}
+  .monitor-board .mon-time{text-align:right;font-size:13px;color:#9ca3af;}
+  .monitor-board .mon-time .clock{font-size:20px;font-weight:700;color:#fff;}
+  /* riga combinata: card operatori a sx, titolo grande a dx, stessa altezza -> risparmia spazio verticale */
+  .monitor-board .mon-header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:18px;}
+  .monitor-board .mon-header h1{color:#fff;font-size:34px;line-height:1.15;letter-spacing:.3px;margin:0;text-align:right;white-space:nowrap;}
+  /* flex (non grid a colonne fisse) cosi' il numero di operatori puo' cambiare
+     in futuro senza dover ridisegnare il layout: ogni card ha larghezza fissa. */
+  /* card operatore compatta e orizzontale: stesso testo di prima (nessun font
+     rimpicciolito), ma meno altezza cosi' restano piu' righe visibili sotto. */
+  .op-row{display:flex;flex-wrap:wrap;gap:12px;}
+  .op-card{width:210px;border-radius:12px;padding:10px 12px;background:#0f1420;border:1.5px solid;}
+  .op-card-top{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+  .op-card .op-name{font-weight:700;font-size:14px;color:#fff;line-height:1.15;}
+  .op-card .op-role{font-size:11px;color:#9ca3af;}
+  .op-avatar{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .op-avatar svg{width:22px;height:22px;}
+  .op-card-bottom{display:flex;align-items:center;justify-content:space-between;}
+  .op-count-block{display:flex;flex-direction:column;align-items:flex-start;line-height:1;}
+  .op-count{font-size:30px;font-weight:800;color:#fff;line-height:1;}
+  .op-count-label{font-size:10.5px;color:#9ca3af;letter-spacing:.5px;margin-top:3px;}
+  .op-urgent{font-size:13px;font-weight:800;white-space:nowrap;}
+  .mon-section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .mon-section-title .left{display:flex;align-items:center;gap:8px;color:#f87171;font-weight:700;font-size:15px;letter-spacing:.3px;}
+  .mon-filter{background:#131a26;border:1px solid #2a3242;color:#cbd5e1;border-radius:8px;padding:6px 10px;font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer;}
+  .mon-table-wrap{background:#0f1420;border:1px solid #1e2634;border-radius:14px;overflow:hidden;margin-bottom:16px;}
+  .mon-table{width:100%;border-collapse:collapse;font-size:13px;}
+  .mon-table th{text-align:left;color:#8b96a8;font-weight:600;font-size:11px;letter-spacing:.4px;text-transform:uppercase;
+    padding:12px 14px;border-bottom:1px solid #1e2634;background:#0c111c;}
+  .mon-table td{padding:12px 14px;border-bottom:1px solid #171e2b;color:#e5e7eb;vertical-align:middle;}
+  .mon-table tr:last-child td{border-bottom:none;}
+  .mon-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.3px;}
+  .mon-badge.critica{background:#3a1418;color:#f87171;}
+  .mon-badge.alta{background:#3a2410;color:#fb923c;}
+  .mon-badge.media{background:#3a3010;color:#facc15;}
+  .mon-badge.bassa{background:#123420;color:#4ade80;}
+  .fase-cell{display:flex;align-items:center;gap:8px;color:#cbd5e1;}
+  .fase-cell svg{width:16px;height:16px;flex-shrink:0;color:#8b96a8;}
+  .op-cell{display:flex;align-items:center;gap:8px;}
+  .op-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+  .mon-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;}
+  .mon-stat{background:#0f1420;border:1px solid #1e2634;border-radius:12px;padding:16px 18px;}
+  .mon-stat .lbl{display:flex;align-items:center;gap:10px;font-size:11.5px;font-weight:700;letter-spacing:.4px;margin-bottom:10px;}
+  .mon-stat .lbl svg{width:100%;height:100%;}
+  .mon-stat .val small{font-size:12px;font-weight:500;color:#8b96a8;margin-left:4px;}
+  .ic{display:inline-flex;width:16px;height:16px;vertical-align:middle;flex-shrink:0;}
+  .ic svg{width:100%;height:100%;display:block;}
+  .op-avatar .ic{width:22px;height:22px;color:#fff;}
+  .mon-section-title .left .ic{width:20px;height:20px;color:#f87171;}
+  .mon-filter .ic{width:14px;height:14px;color:#cbd5e1;}
+  /* icone della barra KPI in basso: molto piu' grandi, impatto immediato anche da lontano (TV/parete) */
+  .mon-stat .lbl .ic{width:32px;height:32px;color:inherit;}
+  .mon-stat .lbl .ic[data-i="bell"]{width:36px;height:36px;}
+  .ic-red{color:#f87171;}
+  .ic-orange{color:#fb923c;}
+  .ic-yellow{color:#facc15;}
+  .ic-green{color:#4ade80;}
+
+  /* ===== DINAMICITA': pulsazione righe/badge/icone, piu' veloce = piu' urgente ===== */
+  /* righe della tabella: leggero respiro del fondo, velocita' legata alla priorita' */
+  @keyframes rowPulseRed{0%,100%{background-color:rgba(239,68,68,.05);}50%{background-color:rgba(239,68,68,.16);}}
+  @keyframes rowPulseOrange{0%,100%{background-color:rgba(249,115,22,.04);}50%{background-color:rgba(249,115,22,.13);}}
+  @keyframes rowPulseYellow{0%,100%{background-color:rgba(234,179,8,.03);}50%{background-color:rgba(234,179,8,.10);}}
+  @keyframes rowPulseGreen{0%,100%{background-color:rgba(34,197,94,.02);}50%{background-color:rgba(34,197,94,.07);}}
+  .mon-table tr.pulse-critica{animation:rowPulseRed .9s ease-in-out infinite;}
+  .mon-table tr.pulse-alta{animation:rowPulseOrange 1.5s ease-in-out infinite;}
+  .mon-table tr.pulse-media{animation:rowPulseYellow 2.2s ease-in-out infinite;}
+  .mon-table tr.pulse-bassa{animation:rowPulseGreen 3s ease-in-out infinite;}
+
+  /* badge di priorita': si illuminano (glow) alla stessa velocita' della riga */
+  @keyframes badgeGlowRed{0%,100%{box-shadow:0 0 0 rgba(248,113,113,0);}50%{box-shadow:0 0 9px 1px rgba(248,113,113,.75);}}
+  @keyframes badgeGlowOrange{0%,100%{box-shadow:0 0 0 rgba(251,146,60,0);}50%{box-shadow:0 0 9px 1px rgba(251,146,60,.7);}}
+  @keyframes badgeGlowYellow{0%,100%{box-shadow:0 0 0 rgba(250,204,21,0);}50%{box-shadow:0 0 8px 1px rgba(250,204,21,.6);}}
+  @keyframes badgeGlowGreen{0%,100%{box-shadow:0 0 0 rgba(74,222,128,0);}50%{box-shadow:0 0 7px 1px rgba(74,222,128,.5);}}
+  .mon-badge.critica{animation:badgeGlowRed .9s ease-in-out infinite;}
+  .mon-badge.alta{animation:badgeGlowOrange 1.5s ease-in-out infinite;}
+  .mon-badge.media{animation:badgeGlowYellow 2.2s ease-in-out infinite;}
+  .mon-badge.bassa{animation:badgeGlowGreen 3s ease-in-out infinite;}
+
+  /* icona di pericolo per riga: pulsa (scala) e si illumina (drop-shadow), stessa velocita' della riga */
+  @keyframes iconGlowRed{0%,100%{transform:scale(1);filter:drop-shadow(0 0 0 rgba(248,113,113,0));}50%{transform:scale(1.22);filter:drop-shadow(0 0 5px rgba(248,113,113,.95));}}
+  @keyframes iconGlowOrange{0%,100%{transform:scale(1);filter:drop-shadow(0 0 0 rgba(251,146,60,0));}50%{transform:scale(1.18);filter:drop-shadow(0 0 5px rgba(251,146,60,.9));}}
+  @keyframes iconGlowYellow{0%,100%{transform:scale(1);filter:drop-shadow(0 0 0 rgba(250,204,21,0));}50%{transform:scale(1.15);filter:drop-shadow(0 0 4px rgba(250,204,21,.8));}}
+  @keyframes iconGlowGreen{0%,100%{transform:scale(1);filter:drop-shadow(0 0 0 rgba(74,222,128,0));}50%{transform:scale(1.12);filter:drop-shadow(0 0 4px rgba(74,222,128,.7));}}
+  .ic.ic-red{animation:iconGlowRed .9s ease-in-out infinite;}
+  .ic.ic-orange{animation:iconGlowOrange 1.5s ease-in-out infinite;}
+  .ic.ic-yellow{animation:iconGlowYellow 2.2s ease-in-out infinite;}
+  .ic.ic-green{animation:iconGlowGreen 3s ease-in-out infinite;}
+  /* triangolo di allerta nel titolo della sezione: pulsa come il livello piu' critico */
+  .mon-section-title .left .ic{animation:iconGlowRed .9s ease-in-out infinite;}
+
+  /* campana "ALLERT TOTALI": simula uno squillo continuo */
+  @keyframes ringBell{
+    0%,60%,100%{transform:rotate(0deg);}
+    62%{transform:rotate(15deg);} 64%{transform:rotate(-13deg);} 66%{transform:rotate(10deg);}
+    68%{transform:rotate(-8deg);} 70%{transform:rotate(6deg);} 72%{transform:rotate(-4deg);}
+    74%{transform:rotate(2deg);} 76%{transform:rotate(0deg);}
+  }
+  .ic[data-i="bell"]{transform-origin:50% 8%;animation:ringBell 2.2s ease-in-out infinite;}
+
+  @media (prefers-reduced-motion: reduce){
+    .mon-table tr, .mon-badge, .ic{animation:none !important;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav>
+    <div class="brand">Dasch Assistenze<small>prototipo dati mock</small></div>
+    <button class="nav-btn active" data-target="direzione">Dashboard Direzione</button>
+    <button class="nav-btn" data-target="operatore">Le mie pratiche</button>
+    <button class="nav-btn" data-target="pratica">Pratica 977/26</button>
+    <button class="nav-btn" data-target="admin">Admin</button>
+  </nav>
+  <main>
+
+  <div class="banner">Prototipo statico con dati di esempio presi dal CSV reale (Piano di carico Vamart) — nessuna connessione al database. Serve per validare interfaccia e flusso prima del collegamento a Supabase.</div>
+
+  <!-- DASHBOARD DIREZIONE = MONITOR ASSISTENZE (sostituisce la vecchia dashboard chiara) -->
+  <section id="direzione" class="active">
+    <div class="monitor-board">
+      <div class="mon-topbar">
+        <button class="mon-exit" onclick="toggleKiosk()" id="fs-btn">🖥 Schermo intero</button>
+        <div class="mon-time"><div id="mon-date"></div><div class="clock" id="mon-clock"></div></div>
+      </div>
+
+      <div class="mon-header">
+        <div class="op-row">
+          <div class="op-card" style="border-color:#7f1d1d;">
+            <div class="op-card-top">
+              <div class="op-avatar" style="background:#ef4444;"><i class="ic" data-i="person"></i></div>
+              <div><div class="op-name">MARIA ROSSI</div><div class="op-role">Operatore</div></div>
+            </div>
+            <div class="op-card-bottom">
+              <div class="op-count-block"><div class="op-count">8</div><div class="op-count-label">ALERT ATTIVI</div></div>
+              <div class="op-urgent" style="color:#f87171;">3 URGENTI</div>
+            </div>
+          </div>
+          <div class="op-card" style="border-color:#7c2d12;">
+            <div class="op-card-top">
+              <div class="op-avatar" style="background:#f97316;"><i class="ic" data-i="person"></i></div>
+              <div><div class="op-name">GIORGIO BIANCHI</div><div class="op-role">Operatore</div></div>
+            </div>
+            <div class="op-card-bottom">
+              <div class="op-count-block"><div class="op-count">5</div><div class="op-count-label">ALERT ATTIVI</div></div>
+              <div class="op-urgent" style="color:#fb923c;">2 URGENTI</div>
+            </div>
+          </div>
+        </div>
+        <h1>MONITORAGGIO<br>ASSISTENZE</h1>
+      </div>
+
+      <div class="mon-section-title">
+        <div class="left"><i class="ic" data-i="warning"></i> ALERT CON SCADENZA PIÙ IMMINENTE</div>
+        <div class="mon-filter" onclick="toggleUrgenti()"><i class="ic" data-i="filter"></i> <span id="filter-label">Mostra solo urgenti</span></div>
+      </div>
+
+      <div class="mon-table-wrap">
+        <table class="mon-table" id="mon-table">
+          <tr>
+            <th></th><th>Priorità</th><th>Scadenza</th><th>Pratica</th><th>Cliente</th>
+            <th>Fase in ritardo</th><th>Descrizione</th><th>Operatore</th><th>Azione richiesta</th>
+          </tr>
+          <tr data-urgente="1" class="pulse-critica">
+            <td><i class="ic ic-red" data-i="warn-sm"></i></td><td><span class="mon-badge critica">CRITICA</span></td>
+            <td>15/05/2025<br>11:00</td><td>ASS-2025-1487</td><td>Rossi S.r.l.</td>
+            <td><div class="fase-cell"><i class="ic" data-i="box"></i> Arrivo merce</div></td>
+            <td>Ritardo arrivo merce da fornitore</td>
+            <td><div class="op-cell"><span class="op-dot" style="background:#ef4444;"></span>Maria Rossi</div></td>
+            <td>Verificare con fornitore</td>
+          </tr>
+          <tr data-urgente="1" class="pulse-critica">
+            <td><i class="ic ic-red" data-i="warn-sm"></i></td><td><span class="mon-badge critica">CRITICA</span></td>
+            <td>15/05/2025<br>14:30</td><td>ASS-2025-1452</td><td>Bianchi Spa</td>
+            <td><div class="fase-cell"><i class="ic" data-i="doc"></i> Creazione commissione</div></td>
+            <td>Commissione non ancora creata</td>
+            <td><div class="op-cell"><span class="op-dot" style="background:#ef4444;"></span>Maria Rossi</div></td>
+            <td>Creare commissione</td>
+          </tr>
+          <tr data-urgente="0" class="pulse-alta">
+            <td><i class="ic ic-orange" data-i="warn-sm"></i></td><td><span class="mon-badge alta">ALTA</span></td>
+            <td>15/05/2025<br>16:00</td><td>ASS-2025-1499</td><td>Verdi Impianti</td>
+            <td><div class="fase-cell"><i class="ic" data-i="person-sm"></i> Presa in carico</div></td>
+            <td>Presa in carico in ritardo</td>
+            <td><div class="op-cell"><span class="op-dot" style="background:#f97316;"></span>Giorgio Bianchi</div></td>
+            <td>Prendere in carico</td>
+          </tr>
+          <tr data-urgente="0" class="pulse-alta">
+            <td><i class="ic ic-orange" data-i="warn-sm"></i></td><td><span class="mon-badge alta">ALTA</span></td>
+            <td>16/05/2025<br>09:00</td><td>ASS-2025-1503</td><td>Blu Service</td>
+            <td><div class="fase-cell"><i class="ic" data-i="cart"></i> Ordine ricambi</div></td>
+            <td>Ordine ricambi non ancora inviato</td>
+            <td><div class="op-cell"><span class="op-dot" style="background:#f97316;"></span>Giorgio Bianchi</div></td>
+            <td>Inviare ordine ricambi</td>
+          </tr>
+          <tr data-urgente="0" class="pulse-media">
+            <td><i class="ic ic-yellow" data-i="warn-sm"></i></td><td><span class="mon-badge media">MEDIA</span></td>
+            <td>16/05/2025<br>11:00</td><td>ASS-2025-1477</td><td>Tecno Casa</td>
+            <td><div class="fase-cell"><i class="ic" data-i="truck"></i> Consegna materiale</div></td>
+            <td>Consegna materiale in ritardo</td>
+            <td><div class="op-cell"><span class="op-dot" style="background:#ef4444;"></span>Maria Rossi</div></td>
+            <td>Organizzare consegna</td>
+          </tr>
+          <tr data-urgente="0" class="pulse-media">
+            <td><i class="ic ic-yellow" data-i="warn-sm"></i></td><td><span class="mon-badge media">MEDIA</span></td>
+            <td>16/05/2025<br>15:00</td><td>ASS-2025-1481</td><td>Hotel Milano</td>
+            <td><div class="fase-cell"><i class="ic" data-i="box"></i> Arrivo merce</div></td>
+            <td>Merce arrivata in ritardo</td>
+            <td><div class="op-cell"><span class="op-dot" style="background:#f97316;"></span>Giorgio Bianchi</div></td>
+            <td>Verificare e registrare</td>
+          </tr>
+          <tr data-urgente="0" class="pulse-bassa">
+            <td><i class="ic ic-green" data-i="warn-sm"></i></td><td><span class="mon-badge bassa">BASSA</span></td>
+            <td>17/05/2025<br>10:00</td><td>ASS-2025-1469</td><td>Edil Progetti</td>
+            <td><div class="fase-cell"><i class="ic" data-i="check"></i> Chiusura assistenza</div></td>
+            <td>Chiusura pratica in ritardo</td>
+            <td><div class="op-cell"><span class="op-dot" style="background:#ef4444;"></span>Maria Rossi</div></td>
+            <td>Chiudere assistenza</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="mon-stats">
+        <div class="mon-stat"><div class="lbl" style="color:#f87171;"><i class="ic" data-i="bell"></i> ALLERT TOTALI</div><div class="val">23 <small>di cui 8 urgenti</small></div></div>
+        <div class="mon-stat"><div class="lbl" style="color:#fb923c;"><i class="ic" data-i="clock"></i> SCADUTI</div><div class="val">7 <small>da gestire</small></div></div>
+        <div class="mon-stat"><div class="lbl" style="color:#facc15;"><i class="ic" data-i="alert-circle"></i> IN SCADENZA OGGI</div><div class="val">12</div></div>
+        <div class="mon-stat"><div class="lbl" style="color:#60a5fa;"><i class="ic" data-i="check-circle"></i> RISOLTI OGGI</div><div class="val">15</div></div>
+        <div class="mon-stat"><div class="lbl" style="color:#4ade80;"><i class="ic" data-i="calendar"></i> PRATICHE TOTALI</div><div class="val">184 <small>aperte</small></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DASHBOARD OPERATORE -->
+  <section id="operatore">
+    <h1>Le mie pratiche — Maria Rossi</h1>
+    <div class="card" style="margin-bottom:20px;">
+      <h2>Alert e notifiche</h2>
+      <div class="notif alert">⚠ Pratica 977/26: fase "Invio ordine ricambi" in ritardo di 36 ore</div>
+      <div class="notif esc">⛔ Pratica 819/26: cliente mancante nel dato importato — verifica manuale richiesta</div>
+    </div>
+    <div class="card">
+      <h2>Pratiche assegnate</h2>
+      <div class="pratica-row" onclick="mostra('pratica')">
+        <div><div class="titolo">977/26 — Rullo Bulgarelli Assunta Antonio</div><div class="sub">Completamento · scadenza 08/09/2026</div></div>
+        <span class="badge urgente">urgente</span>
+      </div>
+      <div class="pratica-row">
+        <div><div class="titolo">819/26 — Cliente da verificare</div><div class="sub">Camera da letto · scadenza 30/06/2026</div></div>
+        <span class="badge alta">alta</span>
+      </div>
+      <div class="pratica-row">
+        <div><div class="titolo">735/26 — (fasce laterali completamento)</div><div class="sub">Completamento · scadenza 01/07/2026</div></div>
+        <span class="badge normale">normale</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRATICA DETTAGLIO -->
+  <section id="pratica">
+    <h1>Pratica 977/26</h1>
+    <p class="muted" style="margin-top:-14px;">Rullo Bulgarelli Assunta Antonio · Completamento · assegnata a Maria Rossi</p>
+    <div class="grid split">
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Timeline fasi</h2>
+          <ul class="timeline">
+            <li class="done"><div class="fase-nome">Ricezione segnalazione</div><div class="fase-info">completata · 06/07/2026 09:10</div></li>
+            <li class="done"><div class="fase-nome">Presa in carico</div><div class="fase-info">completata · 06/07/2026 10:40</div></li>
+            <li class="progress"><div class="fase-nome">Apertura pratica / Creazione commissione</div><div class="fase-info">in corso · prevista entro 09/07/2026</div></li>
+            <li><div class="fase-nome">Invio ordine ricambi</div><div class="fase-info">da iniziare</div></li>
+            <li><div class="fase-nome">Arrivo merce in deposito</div><div class="fase-info">da iniziare</div></li>
+            <li><div class="fase-nome">Preparazione intervento</div><div class="fase-info">da iniziare</div></li>
+            <li><div class="fase-nome">Consegna materiale</div><div class="fase-info">da iniziare</div></li>
+            <li><div class="fase-nome">Chiusura assistenza</div><div class="fase-info">da iniziare</div></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h2>Righe / articoli (3)</h2>
+          <table>
+            <tr><th>Descrizione</th><th>Fornitore</th><th>Stato</th><th>Consegna prevista</th></tr>
+            <tr><td>anta colonna frigo inferiore</td><td>Scavolini spa</td><td><span class="badge info">Da ordinare</span></td><td>08/09/2026</td></tr>
+            <tr><td>frontale primo cestone base sotto lavello</td><td>Scavolini spa</td><td><span class="badge info">Da ordinare</span></td><td>08/09/2026</td></tr>
+            <tr><td>frontale sup pensile cappa</td><td>Scavolini spa</td><td><span class="badge info">Da ordinare</span></td><td>08/09/2026</td></tr>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Allegati</h2>
+          <p class="muted" style="font-size:13px;">Nessun allegato caricato.</p>
+          <button class="btn">+ Carica file</button>
+        </div>
+        <div class="card">
+          <h2>Storico modifiche</h2>
+          <p style="font-size:12.5px;margin:0 0 8px;"><span class="tag">06/07 14:02</span><br>status_riga: "—" → "Da ordinare" <span class="tag">(importazione_csv)</span></p>
+          <p style="font-size:12.5px;margin:0;"><span class="tag">06/07 10:40</span><br>fase presa_in_carico: "da_iniziare" → "completata" <span class="tag">(utente: Maria Rossi)</span></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ADMIN -->
+  <section id="admin">
+    <h1>Pannello amministratore</h1>
+    <div class="card" style="margin-bottom:18px;">
+      <h2>Regole di assegnazione</h2>
+      <table>
+        <tr><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th></tr>
+        <tr><td>Cognomi A–C</td><td>iniziale_cognome</td><td>A – C</td><td>Maria Rossi</td><td>10</td><td><span class="badge ok">Sì</span></td></tr>
+        <tr><td>Cognomi D–M</td><td>iniziale_cognome</td><td>D – M</td><td>Giorgio Bianchi</td><td>20</td><td><span class="badge ok">Sì</span></td></tr>
+        <tr><td>Cognomi N–Z</td><td>iniziale_cognome</td><td>N – Z</td><td>Luca Verdi</td><td>30</td><td><span class="badge ok">Sì</span></td></tr>
+      </table>
+    </div>
+    <div class="card" style="margin-bottom:18px;">
+      <h2>Regole SLA / Alert</h2>
+      <table>
+        <tr><th>Nome</th><th>Fase</th><th>Soglia</th><th>Livello</th></tr>
+        <tr><td>Presa in carico non avvenuta</td><td>Presa in carico</td><td>24 ore</td><td><span class="badge alta">alert</span></td></tr>
+        <tr><td>Commissione non creata</td><td>Creazione commissione</td><td>3 giorni</td><td><span class="badge alta">alert</span></td></tr>
+        <tr><td>Materiale non arrivato</td><td>Arrivo merce</td><td>30 giorni</td><td><span class="badge urgente">escalation</span></td></tr>
+        <tr><td>Pratica ferma da troppo tempo</td><td>Generale</td><td>10 giorni</td><td><span class="badge urgente">escalation</span></td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Importazioni CSV</h2>
+      <table>
+        <tr><th>File</th><th>Stato</th><th>Nuove</th><th>Aggiornate</th><th>Errori</th><th>Data</th></tr>
+        <tr><td>Piano di carico - Vamart.csv</td><td><span class="badge alta">completata con errori</span></td><td>2.281</td><td>0</td><td>8</td><td>06/07/2026 19:10</td></tr>
+      </table>
+      <p class="muted" style="font-size:12.5px;margin-top:10px;">6.016 righe lette, 2.281 pratiche riconosciute, 1.367 clienti, 73 fornitori — verificato sul file reale fornito.</p>
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<script>
+  function mostra(id){
+    document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.target === id));
+    // uscendo dalla dashboard direzione si esce anche dalla modalita' schermo intero
+    if(id !== 'direzione') document.querySelector('.app').classList.remove('kiosk');
+  }
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => mostra(btn.dataset.target));
+  });
+
+  // modalita' schermo intero per il monitor (uso su TV/schermo da parete)
+  function toggleKiosk(){
+    const kiosk = document.querySelector('.app').classList.toggle('kiosk');
+    document.getElementById('fs-btn').textContent = kiosk ? '✕ Esci da schermo intero' : '🖥 Schermo intero';
+  }
+
+  // orologio live per il monitor
+  function tickClock(){
+    const now = new Date();
+    const mesi = ['GENNAIO','FEBBRAIO','MARZO','APRILE','MAGGIO','GIUGNO','LUGLIO','AGOSTO','SETTEMBRE','OTTOBRE','NOVEMBRE','DICEMBRE'];
+    const d = document.getElementById('mon-date');
+    const c = document.getElementById('mon-clock');
+    if(d) d.textContent = `${now.getDate()} ${mesi[now.getMonth()]} ${now.getFullYear()}`;
+    if(c) c.textContent = now.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+  }
+  setInterval(tickClock, 1000);
+  tickClock();
+
+  // libreria icone inline (stroke="currentColor", nessuna dipendenza esterna)
+  const ICONS = {
+    person: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>',
+    'person-sm': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>',
+    warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+    'warn-sm': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+    filter: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.5 10 19 14 21 14 12.5 22 3"/></svg>',
+    box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 8-9-5-9 5 9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>',
+    doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><p
