@@ -112,7 +112,7 @@ export default async function DashboardDirezionePage() {
         operatori={operatori}
         alertRows={alertRows}
         stats={stats}
-        righeMax={10}
+        righeMax={11}
       />
     </div>
   );

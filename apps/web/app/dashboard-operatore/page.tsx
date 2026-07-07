@@ -97,7 +97,7 @@ export default async function DashboardOperatorePage() {
         }}
         messaggioVuoto="Nessuna pratica in ritardo al momento: sei in linea con tutte le scadenze."
         mostraSelettoreSchermoIntero={false}
-        righeMax={10}
+        righeMax={11}
       />
     </div>
   );
