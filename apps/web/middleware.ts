@@ -26,40 +26,52 @@ export async function middleware(request: NextRequest) {
   if (!richiedeAutenticazione) return NextResponse.next();
 
   let response = NextResponse.next({ request: { headers: request.headers } });
+  const destinazioneLogin = richiedeSoloAdmin ? "/login/admin" : "/login/operatore";
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return request.cookies.get(name)?.value;
+  try {
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return request.cookies.get(name)?.value;
+          },
+          set(name: string, value: string, options: any) {
+            response.cookies.set({ name, value, ...options });
+          },
+          remove(name: string, options: any) {
+            response.cookies.set({ name, value: "", ...options });
+          },
         },
-        set(name: string, value: string, options: any) {
-          response.cookies.set({ name, value, ...options });
-        },
-        remove(name: string, options: any) {
-          response.cookies.set({ name, value: "", ...options });
-        },
-      },
+      }
+    );
+
+    // Destrutturazione difensiva: se getUser() torna un errore (nessuna
+    // sessione), "data" può non avere la forma attesa. Non fidarsi del
+    // destructuring diretto: qui un'eccezione andrebbe intercettata dal
+    // catch sotto, ma meglio evitarla proprio e trattarla come "non loggato".
+    const { data, error: erroreSessione } = await supabase.auth.getUser();
+    const user = data?.user ?? null;
+
+    if (!user || erroreSessione) {
+      return NextResponse.redirect(new URL(destinazioneLogin, request.url));
     }
-  );
 
-  const { data: { user } } = await supabase.auth.getUser();
+    if (richiedeSoloAdmin) {
+      const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", user.id).maybeSingle();
+      if (!profilo || !["admin", "responsabile"].includes(profilo.ruolo)) {
+        return NextResponse.redirect(new URL("/dashboard-operatore", request.url));
+      }
+    }
 
-  if (!user) {
-    const destinazioneLogin = richiedeSoloAdmin ? "/login/admin" : "/login/operatore";
+    return response;
+  } catch (err) {
+    // Fail-closed: se il controllo di sessione fallisce per qualsiasi motivo
+    // imprevisto, meglio rimandare al login piuttosto che lasciar passare
+    // la richiesta senza controlli.
     return NextResponse.redirect(new URL(destinazioneLogin, request.url));
   }
-
-  if (richiedeSoloAdmin) {
-    const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", user.id).maybeSingle();
-    if (!profilo || !["admin", "responsabile"].includes(profilo.ruolo)) {
-      return NextResponse.redirect(new URL("/dashboard-operatore", request.url));
-    }
-  }
-
-  return response;
 }
 
 export const config = {
