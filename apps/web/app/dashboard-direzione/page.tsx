@@ -1,84 +1,111 @@
 // app/dashboard-direzione/page.tsx
-// Dashboard direzione: KPI aggregati, pratiche in ritardo, carico per operatore.
+// Monitor Assistenze — pensata per un grande schermo in ufficio: mostra lo
+// stato di tutte le pratiche in ritardo, per operatore, sempre aggiornato.
+// Il responsabile la tiene sempre a vista e interviene sugli alert persistenti.
 import { creaSupabaseClientServer } from "@/lib/supabase/server";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
+import MonitorBoard, { type AlertRigaMonitor, type OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, livelloMonitor, coloreOperatore, formattaScadenza } from "@/lib/monitor/mappature";
 
-export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
+export const dynamic = "force-dynamic";
 
-async function caricaDatiDashboard() {
+function oggiIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function caricaDatiMonitor() {
   const supabase = creaSupabaseClientServer();
+  const adesso = new Date().toISOString();
 
-  const [{ count: aperte }, { count: inRitardo }, { data: perOperatore }, { data: kpiTempi }] = await Promise.all([
+  const [{ data: faseRitardo }, { data: operatoriAttivi }, { count: praticheTotali }, { count: risoltiOggi }] = await Promise.all([
+    supabase
+      .from("pratica_fasi")
+      .select(`
+        id, stato, data_prevista,
+        fasi_workflow(codice, nome),
+        pratiche(id, codice_commissione, priorita, stato_generale, operatore_assegnato_id,
+          clienti(nome_completo),
+          utenti:operatore_assegnato_id(id, nome, cognome, colore_badge)
+        )
+      `)
+      .in("stato", ["da_iniziare", "in_corso"])
+      .lt("data_prevista", adesso)
+      .order("data_prevista", { ascending: true })
+      .limit(300),
+    supabase.from("utenti").select("id, nome, cognome, colore_badge").eq("ruolo", "operatore").eq("attivo", true).order("nome"),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).not("stato_generale", "in", '("chiusa","annullata")'),
-    supabase.from("v_pratiche_in_ritardo").select("pratica_id", { count: "exact", head: true }),
-    supabase.rpc("pratiche_per_operatore"), // funzione SQL di supporto, vedi docs/03-schema-database.md
-    supabase.rpc("tempo_medio_chiusura_giorni"),
+    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
   ]);
 
-  return { aperte: aperte ?? 0, inRitardo: inRitardo ?? 0, perOperatore: perOperatore ?? [], kpiTempi: kpiTempi ?? null };
+  // Le pratiche già chiuse/annullate non contano come "in ritardo" anche se
+  // una loro fase è rimasta con data_prevista scaduta: filtro qui perché
+  // PostgREST non permette di filtrare comodamente su una colonna della
+  // relazione embedded direttamente nella query.
+  const righe = (faseRitardo ?? []).filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale));
+
+  const oggi = oggiIso();
+  const alertRows: AlertRigaMonitor[] = righe.map((r: any) => {
+    const p = r.pratiche;
+    const fw = r.fasi_workflow;
+    const { data, ora } = formattaScadenza(r.data_prevista);
+    const opNome = p.utenti ? `${p.utenti.nome} ${p.utenti.cognome}` : "Non assegnato";
+    const opColore = p.utenti ? coloreOperatore(p.utenti.id, p.utenti.colore_badge) : "#6b7280";
+    return {
+      id: r.id,
+      livello: livelloMonitor(p.priorita),
+      scadenzaData: data,
+      scadenzaOra: ora,
+      praticaCodice: p.codice_commissione,
+      cliente: p.clienti?.nome_completo ?? "—",
+      faseNome: fw?.nome ?? "Fase",
+      faseIcona: ICONA_PER_FASE[fw?.codice] ?? "warn-sm",
+      descrizione: `${fw?.nome ?? "Fase"} in ritardo`,
+      operatoreNome: opNome,
+      operatoreColore: opColore,
+      azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
+    };
+  });
+
+  const operatori: OperatoreCardMonitor[] = (operatoriAttivi ?? []).map((op: any) => {
+    const righeOp = righe.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
+    return {
+      id: op.id,
+      nome: `${op.nome} ${op.cognome}`,
+      colore: coloreOperatore(op.id, op.colore_badge),
+      alertAttivi: righeOp.length,
+      urgenti: righeOp.filter((r: any) => r.pratiche.priorita === "urgente").length,
+    };
+  });
+
+  const scaduti = righe.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
+  const inScadenzaOggi = righe.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
+
+  return {
+    alertRows,
+    operatori,
+    stats: {
+      allertTotali: alertRows.length,
+      allertUrgenti: alertRows.filter((r) => r.livello === "critica").length,
+      scaduti,
+      inScadenzaOggi,
+      risoltiOggi: risoltiOggi ?? 0,
+      praticheTotali: praticheTotali ?? 0,
+    },
+  };
 }
 
 export default async function DashboardDirezionePage() {
   await richiediAdmin();
-  const { aperte, inRitardo, perOperatore, kpiTempi } = await caricaDatiDashboard();
+  const { alertRows, operatori, stats } = await caricaDatiMonitor();
 
   return (
-    <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Dashboard Direzione</h1>
-
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <KpiCard titolo="Pratiche aperte" valore={aperte} />
-        <KpiCard titolo="Pratiche in ritardo" valore={inRitardo} evidenzia={inRitardo > 0} />
-        <KpiCard titolo="Tempo medio chiusura (gg)" valore={kpiTempi ?? "-"} />
-        <KpiCard titolo="Operatori attivi" valore={perOperatore.length} />
-      </section>
-
-      <section className="bg-white rounded-xl shadow p-4">
-        <h2 className="text-lg font-medium mb-3">Pratiche per operatore</h2>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500">
-              <th className="py-2">Operatore</th>
-              <th>Aperte</th>
-              <th>In ritardo</th>
-              <th>Chiuse (30gg)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {perOperatore.map((riga: any) => (
-              <tr key={riga.operatore_id} className="border-t">
-                <td className="py-2">{riga.operatore_nome}</td>
-                <td>{riga.aperte}</td>
-                <td className={riga.in_ritardo > 0 ? "text-red-600 font-medium" : ""}>{riga.in_ritardo}</td>
-                <td>{riga.chiuse_30gg}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-
-      {/* Filtri e ricerca avanzata: componente client separato per interattività */}
-      <FiltriRicercaAvanzata />
-    </main>
-  );
-}
-
-function KpiCard({ titolo, valore, evidenzia = false }: { titolo: string; valore: number | string; evidenzia?: boolean }) {
-  return (
-    <div className={`rounded-xl shadow p-4 ${evidenzia ? "bg-red-50 border border-red-200" : "bg-white"}`}>
-      <p className="text-sm text-gray-500">{titolo}</p>
-      <p className={`text-3xl font-semibold ${evidenzia ? "text-red-600" : "text-gray-900"}`}>{valore}</p>
+    <div className="p-4">
+      <MonitorBoard
+        titolo={<>MONITORAGGIO<br />ASSISTENZE</>}
+        operatori={operatori}
+        alertRows={alertRows}
+        stats={stats}
+      />
     </div>
-  );
-}
-
-function FiltriRicercaAvanzata() {
-  // Placeholder: da implementare come Client Component con stato per
-  // cliente, operatore, stato, intervallo date, categoria, fornitore.
-  return (
-    <section className="bg-white rounded-xl shadow p-4">
-      <h2 className="text-lg font-medium mb-3">Ricerca avanzata</h2>
-      <p className="text-sm text-gray-500">Filtri per cliente, operatore, stato, categoria, intervallo date, fornitore (componente client — vedi components/FiltriRicerca.tsx).</p>
-    </section>
   );
 }

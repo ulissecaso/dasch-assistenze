@@ -42,3 +42,15 @@ export async function alternaAttivaRegola(formData: FormData) {
 
   revalidatePath("/admin");
 }
+
+/** Elimina definitivamente una regola (usare per doppioni creati per errore). */
+export async function eliminaRegolaAssegnazione(formData: FormData) {
+  const id = String(formData.get("id") ?? "");
+  if (!id) throw new Error("id mancante");
+
+  const supabase = creaSupabaseClientAdmin();
+  const { error } = await supabase.from("regole_assegnazione").delete().eq("id", id);
+  if (error) throw error;
+
+  revalidatePath("/admin");
+}

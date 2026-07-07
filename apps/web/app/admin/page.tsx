@@ -4,7 +4,7 @@ import { creaSupabaseClientServer } from "@/lib/supabase/server";
 import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente } from "./operatori-actions";
-import { creaRegolaAssegnazione, alternaAttivaRegola } from "./regole-actions";
+import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
 
 export const dynamic = "force-dynamic";
@@ -91,12 +91,18 @@ export default async function AdminPage() {
                 <td>{r.utenti?.nome} {r.utenti?.cognome}</td>
                 <td>{r.priorita}</td>
                 <td>{r.attiva ? "Sì" : "No"}</td>
-                <td>
+                <td className="flex gap-3 py-1">
                   <form action={alternaAttivaRegola}>
                     <input type="hidden" name="id" value={r.id} />
                     <input type="hidden" name="nuovo_stato" value={(!r.attiva).toString()} />
                     <button type="submit" className="text-xs underline text-gray-500">
                       {r.attiva ? "Disattiva" : "Riattiva"}
+                    </button>
+                  </form>
+                  <form action={eliminaRegolaAssegnazione}>
+                    <input type="hidden" name="id" value={r.id} />
+                    <button type="submit" className="text-xs underline text-red-600">
+                      Elimina
                     </button>
                   </form>
                 </td>

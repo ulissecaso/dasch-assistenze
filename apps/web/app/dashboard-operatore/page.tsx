@@ -1,61 +1,95 @@
 // app/dashboard-operatore/page.tsx
-// Dashboard operatore: pratiche assegnate, priorità, scadenze, alert del giorno.
+// Stesso "Monitor Assistenze" della dashboard direzione, ma con i dati già
+// ristretti alle sole pratiche dell'operatore che ha fatto login: stessa
+// resa grafica, scopo diverso (vista personale invece che vista d'ufficio).
 import { richiediUtente } from "@/lib/auth/richiediUtente";
+import MonitorBoard, { type AlertRigaMonitor, type OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, livelloMonitor, coloreOperatore, formattaScadenza } from "@/lib/monitor/mappature";
 
 export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
+function oggiIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default async function DashboardOperatorePage() {
   const { supabase, user } = await richiediUtente();
+  const adesso = new Date().toISOString();
+  const oggi = oggiIso();
 
-  const { data: pratiche } = await supabase
-    .from("pratiche")
-    .select("id, codice_commissione, tipo, priorita, stato_generale, data_consegna_prevista, clienti(nome_completo)")
-    .eq("operatore_assegnato_id", user.id)
-    .not("stato_generale", "in", '("chiusa","annullata")')
-    .order("priorita", { ascending: false })
-    .order("data_consegna_prevista", { ascending: true });
+  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }] = await Promise.all([
+    supabase.from("utenti").select("nome, cognome, colore_badge").eq("id", user.id).maybeSingle(),
+    supabase
+      .from("pratica_fasi")
+      .select(`
+        id, stato, data_prevista,
+        fasi_workflow(codice, nome),
+        pratiche!inner(id, codice_commissione, priorita, stato_generale, operatore_assegnato_id,
+          clienti(nome_completo)
+        )
+      `)
+      .in("stato", ["da_iniziare", "in_corso"])
+      .lt("data_prevista", adesso)
+      .eq("pratiche.operatore_assegnato_id", user.id)
+      .order("data_prevista", { ascending: true })
+      .limit(200),
+    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).not("stato_generale", "in", '("chiusa","annullata")'),
+    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
+  ]);
 
-  const { data: notifiche } = await supabase
-    .from("notifiche")
-    .select("*")
-    .eq("utente_id", user.id)
-    .eq("letta", false)
-    .order("created_at", { ascending: false })
-    .limit(10);
+  const righe = (faseRitardo ?? []).filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale));
+
+  const opColore = coloreOperatore(user.id, profilo?.colore_badge);
+  const opNome = profilo ? `${profilo.nome} ${profilo.cognome}` : "Operatore";
+
+  const alertRows: AlertRigaMonitor[] = righe.map((r: any) => {
+    const p = r.pratiche;
+    const fw = r.fasi_workflow;
+    const { data, ora } = formattaScadenza(r.data_prevista);
+    return {
+      id: r.id,
+      livello: livelloMonitor(p.priorita),
+      scadenzaData: data,
+      scadenzaOra: ora,
+      praticaCodice: p.codice_commissione,
+      cliente: p.clienti?.nome_completo ?? "—",
+      faseNome: fw?.nome ?? "Fase",
+      faseIcona: ICONA_PER_FASE[fw?.codice] ?? "warn-sm",
+      descrizione: `${fw?.nome ?? "Fase"} in ritardo`,
+      operatoreNome: opNome,
+      operatoreColore: opColore,
+      azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
+    };
+  });
+
+  const operatori: OperatoreCardMonitor[] = [{
+    id: user.id,
+    nome: opNome,
+    colore: opColore,
+    alertAttivi: alertRows.length,
+    urgenti: alertRows.filter((r) => r.livello === "critica").length,
+  }];
+
+  const scaduti = righe.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
+  const inScadenzaOggi = righe.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
   return (
-    <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Le mie pratiche</h1>
-
-      <section className="bg-white rounded-xl shadow p-4">
-        <h2 className="text-lg font-medium mb-3">Alert e notifiche</h2>
-        <ul className="space-y-2">
-          {(notifiche ?? []).map((n) => (
-            <li key={n.id} className={`text-sm p-2 rounded ${n.tipo === "escalation" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}>
-              {n.titolo}: {n.messaggio}
-            </li>
-          ))}
-          {(notifiche ?? []).length === 0 && <li className="text-sm text-gray-400">Nessuna notifica non letta.</li>}
-        </ul>
-      </section>
-
-      <section className="bg-white rounded-xl shadow p-4">
-        <h2 className="text-lg font-medium mb-3">Pratiche assegnate</h2>
-        <div className="grid gap-3">
-          {(pratiche ?? []).map((p: any) => (
-            <a key={p.id} href={`/pratiche/${p.id}`} className="border rounded-lg p-3 hover:shadow-md transition-shadow flex justify-between items-center">
-              <div>
-                <p className="font-medium">{p.codice_commissione} — {p.clienti?.nome_completo}</p>
-                <p className="text-sm text-gray-500">{p.tipo} · scadenza {p.data_consegna_prevista ?? "n/d"}</p>
-              </div>
-              <span className={`text-xs px-2 py-1 rounded-full ${
-                p.priorita === "urgente" ? "bg-red-100 text-red-700" :
-                p.priorita === "alta" ? "bg-orange-100 text-orange-700" : "bg-gray-100 text-gray-600"
-              }`}>{p.priorita}</span>
-            </a>
-          ))}
-        </div>
-      </section>
-    </main>
+    <div className="p-4">
+      <MonitorBoard
+        titolo={<>LE MIE<br />PRATICHE</>}
+        operatori={operatori}
+        alertRows={alertRows}
+        stats={{
+          allertTotali: alertRows.length,
+          allertUrgenti: alertRows.filter((r) => r.livello === "critica").length,
+          scaduti,
+          inScadenzaOggi,
+          risoltiOggi: risoltiOggi ?? 0,
+          praticheTotali: praticheTotali ?? 0,
+        }}
+        messaggioVuoto="Nessuna pratica in ritardo al momento: sei in linea con tutte le scadenze."
+        mostraSelettoreSchermoIntero={false}
+      />
+    </div>
   );
 }
