@@ -14,10 +14,24 @@ export function creaSupabaseClientServer() {
           return cookieStore.get(name)?.value;
         },
         set(name: string, value: string, options: any) {
-          cookieStore.set({ name, value, ...options });
+          // In un Server Component (rendering di sola lettura) cookies()
+          // non permette la scrittura: qui capita quando Supabase prova a
+          // rinfrescare il token durante il rendering della pagina. Il
+          // middleware.ts si occupa già di rinfrescare e persistere il
+          // cookie ad ogni richiesta, quindi qui l'errore è atteso e va
+          // ignorato in sicurezza (pattern raccomandato da Supabase).
+          try {
+            cookieStore.set({ name, value, ...options });
+          } catch {
+            // no-op: siamo in un Server Component, il middleware gestisce già i cookie
+          }
         },
         remove(name: string, options: any) {
-          cookieStore.set({ name, value: "", ...options });
+          try {
+            cookieStore.set({ name, value: "", ...options });
+          } catch {
+            // no-op: siamo in un Server Component, il middleware gestisce già i cookie
+          }
         },
       },
     }
