@@ -76,4 +76,30 @@ async function scaricaCsv() {
     ]);
 
     const nomeFile = `commissioni-assistenza-${new Date().toISOString().slice(0, 10)}.csv`;
-    const percorsoFinale =
+    const percorsoFinale = path.join(CARTELLA_DOWNLOAD, nomeFile);
+    await download.saveAs(percorsoFinale);
+
+    // mantiene anche un riferimento fisso "ultimo.csv" per lo step successivo della pipeline
+    renameSync(percorsoFinale, path.join(CARTELLA_DOWNLOAD, "ultimo.csv"));
+    console.log(`CSV commissioni di assistenza scaricato: ${percorsoFinale}`);
+
+    return percorsoFinale;
+  } catch (err) {
+    // In caso di errore (layout cambiato, 2FA, timeout) salviamo uno
+    // screenshot: aiuta a capire dove si e' bloccato lo script senza
+    // doverlo riprodurre manualmente.
+    try {
+      await page.screenshot({ path: path.join(CARTELLA_DOWNLOAD, "errore-scraper.png"), fullPage: true });
+    } catch {
+      // se anche lo screenshot fallisce, ignoriamo: l'errore originale e' gia' sufficiente
+    }
+    throw err;
+  } finally {
+    await browser.close();
+  }
+}
+
+scaricaCsv().catch((err) => {
+  console.error("Errore durante lo scraping delle commissioni di assistenza da Vamart:", err);
+  process.exit(1);
+});
