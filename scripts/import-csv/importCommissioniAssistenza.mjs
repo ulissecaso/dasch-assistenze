@@ -2,22 +2,29 @@
 // Importatore CSV "Commissioni" (pagina Commissioni di Vamart, filtro
 // "Commissioni Assistenza" = "Solo di assistenza") -> Supabase.
 //
-// Diverso da importVamartCsv.mjs: quel modulo legge il CSV "Piano di carico"
-// (dettaglio articoli/ordini). Questo legge invece l'elenco sintetico delle
-// commissioni di assistenza (una riga per commissione, non per articolo) e
-// serve a intercettare le pratiche aperte direttamente su Vamart dal
-// personale, che non passano dal flusso app/email del cliente e altrimenti
-// non entrerebbero mai nel sistema di monitoraggio.
+// Le commissioni di assistenza su Vamart nascono in due modi diversi, e
+// questo script li gestisce entrambi:
 //
-// Comportamento:
-//  - riconosce pratiche gia' esistenti tramite codice_commissione (stessa
-//    chiave naturale usata da importVamartCsv.mjs) e le lascia invariate:
-//    lo stato di lavorazione resta di competenza del flusso principale
-//  - per le commissioni NON ancora presenti, crea cliente (se mancante) e
-//    una pratica "grezza" con stato iniziale 'aperta', cosi' compare nel
-//    monitoraggio anche se non e' mai arrivata l'email del cliente
-//  - registra la sessione in importazioni_csv (origine: scraper_automatico)
-//    e gli errori riga per riga in importazioni_csv_errori
+//  1) Il cliente segnala un problema via app/sito -> arriva la mail -> il
+//     sistema crea gia' una pratica "in attesa" (fase 'creazione_commissione'
+//     non ancora completata). Quando l'operatore va su Vamart e crea li' la
+//     commissione di assistenza vera, Vamart le assegna un NUMERO NUOVO,
+//     diverso da quello che il cliente aveva citato nella mail: non possiamo
+//     quindi riconoscerla per codice_commissione. La colleghiamo per nome
+//     cliente + vicinanza di data alla pratica "in attesa" corrispondente, e
+//     chiudiamo automaticamente la fase (cosi' il countdown SLA si ferma).
+//     Se l'operatore NON la crea in tempo, la fase resta aperta e il motore
+//     di alert gia' esistente (soglie 24h/48h/escalation) segnala il ritardo.
+//
+//  2) Il venditore crea direttamente una commissione di assistenza su Vamart,
+//     senza che sia mai arrivata una mail dal cliente. In questo caso non
+//     esiste nessuna pratica "in attesa" da collegare: ne creiamo una nuova
+//     "grezza" (come faceva gia' la versione precedente di questo script),
+//     cosi' l'operatore la vede e deve comunque prenderla in carico.
+//
+// Se per lo stesso cliente risultano PIU' pratiche in attesa nella stessa
+// finestra di date (caso ambiguo), non indoviniamo: la riga viene segnalata
+// come errore in importazioni_csv_errori per una verifica manuale.
 //
 // Uso:
 //   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node importCommissioniAssistenza.mjs "/percorso/commissioni.csv"
@@ -37,8 +44,12 @@ if (PROXY_URL) {
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Mappa flessibile: normalizza intestazioni del CSV (case/spazi) su chiavi interne.
-// Se Vamart cambia leggermente il testo delle colonne, va aggiornata qui.
+// Finestra di tolleranza per collegare una commissione Vamart a una pratica
+// "in attesa": la data di apertura della pratica deve cadere entro questi
+// giorni PRIMA o DOPO la data di registrazione su Vamart. Copre normali
+// ritardi operativi senza rischiare di agganciare casi troppo vecchi.
+const FINESTRA_GIORNI_MATCH = 20;
+
 const ALIAS_COLONNE = {
   "id commissione": "idCommissione",
   "id preventivo": "idPreventivo",
@@ -71,7 +82,7 @@ function leggiCsv(percorsoFile) {
       const chiave = ALIAS_COLONNE[normalizzaIntestazione(intestazione)];
       if (chiave) riga[chiave] = valore;
     }
-    riga._numeroRiga = indice + 2; // +1 per header, +1 perche' 1-based
+    riga._numeroRiga = indice + 2;
     riga._grezzo = rigaGrezza;
     return riga;
   });
@@ -90,6 +101,19 @@ async function main() {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+  // Fasi del workflow che questo script deve toccare: risolte per codice,
+  // non per id fisso, cosi' restano valide anche se qualcuno le ricrea.
+  const { data: fasiWorkflow, error: erroreFasi } = await supabase
+    .from("fasi_workflow")
+    .select("id, codice")
+    .in("codice", ["creazione_commissione", "ordine_ricambi"]);
+  if (erroreFasi) throw erroreFasi;
+  const faseCreazioneCommissioneId = fasiWorkflow.find((f) => f.codice === "creazione_commissione")?.id;
+  const faseOrdineRicambiId = fasiWorkflow.find((f) => f.codice === "ordine_ricambi")?.id;
+  if (!faseCreazioneCommissioneId || !faseOrdineRicambiId) {
+    throw new Error("Fasi 'creazione_commissione' e/o 'ordine_ricambi' non trovate in fasi_workflow");
+  }
+
   console.log(`Lettura file: ${percorsoFile}`);
   const righe = leggiCsv(percorsoFile);
   console.log(`Righe lette: ${righe.length}`);
@@ -106,7 +130,7 @@ async function main() {
     .single();
   if (erroreImport) throw erroreImport;
 
-  let nuove = 0, giaPresenti = 0, errori = 0;
+  let nuove = 0, ricollegate = 0, giaPresenti = 0, errori = 0;
 
   for (const riga of righe) {
     try {
@@ -115,6 +139,7 @@ async function main() {
       }
       const codiceCommissione = riga.idCommissione.trim();
 
+      // Gia' tracciata (da un import precedente, con questo stesso numero)?
       const { data: praticaEsistente } = await supabase
         .from("pratiche")
         .select("id")
@@ -127,11 +152,77 @@ async function main() {
       }
 
       const nomeCompleto = [riga.nome, riga.cognome].filter(Boolean).join(" ").trim() || "Cliente sconosciuto";
+      const dataRegistrazione = parseDataItaliana(riga.dataRegistrazione);
+
+      // Cerca una pratica "in attesa" dello stesso cliente (nata da mail,
+      // fase 'creazione_commissione' non ancora completata) aperta in una
+      // finestra di date ragionevole intorno a questa registrazione Vamart.
+      const { data: clientiOmonimi } = await supabase
+        .from("clienti")
+        .select("id")
+        .ilike("nome_completo", nomeCompleto);
+
+      let candidati = [];
+      if (clientiOmonimi && clientiOmonimi.length > 0) {
+        const idsClienti = clientiOmonimi.map((c) => c.id);
+        const { data: pratichePendenti } = await supabase
+          .from("pratiche")
+          .select("id, data_apertura, pratica_fasi!inner(id, stato, fase_id)")
+          .in("cliente_id", idsClienti)
+          .not("stato_generale", "in", "(chiusa,annullata)")
+          .eq("pratica_fasi.fase_id", faseCreazioneCommissioneId)
+          .neq("pratica_fasi.stato", "completata");
+
+        candidati = (pratichePendenti ?? []).filter((p) => {
+          if (!dataRegistrazione || !p.data_apertura) return true;
+          const giorni = Math.abs((new Date(dataRegistrazione) - new Date(p.data_apertura)) / 86400000);
+          return giorni <= FINESTRA_GIORNI_MATCH;
+        });
+      }
+
+      if (candidati.length === 1) {
+        const pratica = candidati[0];
+        const faseCreazione = pratica.pratica_fasi[0];
+
+        await supabase
+          .from("pratica_fasi")
+          .update({
+            stato: "completata",
+            data_effettiva: new Date().toISOString(),
+            note: `Commissione di assistenza creata su Vamart: ${codiceCommissione} (rilevata dal controllo automatico giornaliero).`,
+          })
+          .eq("id", faseCreazione.id);
+
+        await supabase
+          .from("pratica_fasi")
+          .update({ stato: "in_corso" })
+          .eq("pratica_id", pratica.id)
+          .eq("fase_id", faseOrdineRicambiId)
+          .eq("stato", "da_iniziare");
+
+        await supabase.from("storico_modifiche").insert({
+          entita: "pratiche",
+          entita_id: pratica.id,
+          campo: "creazione_commissione",
+          valore_precedente: null,
+          valore_nuovo: codiceCommissione,
+          origine: "scraper_automatico",
+        });
+
+        ricollegate++;
+        continue;
+      }
+
+      if (candidati.length > 1) {
+        throw new Error(
+          `Trovate ${candidati.length} pratiche in attesa per "${nomeCompleto}" nella stessa finestra di date: collegamento ambiguo, servono verifica manuale.`
+        );
+      }
 
       const { data: clienteEsistente } = await supabase
         .from("clienti")
         .select("id")
-        .eq("nome_completo", nomeCompleto)
+        .ilike("nome_completo", nomeCompleto)
         .maybeSingle();
 
       let clienteId = clienteEsistente?.id;
@@ -145,7 +236,7 @@ async function main() {
         clienteId = nuovoCliente.id;
       }
 
-      const dettagliParti = ["Commissione di assistenza importata da Vamart (non presente nel flusso app/email)."];
+      const dettagliParti = ["Commissione di assistenza aperta direttamente su Vamart (nessuna segnalazione via mail collegabile)."];
       if (riga.idPreventivo) dettagliParti.push(`Preventivo: ${riga.idPreventivo}.`);
       if (riga.venditore) dettagliParti.push(`Venditore: ${riga.venditore}.`);
       if (riga.importo) dettagliParti.push(`Importo: ${riga.importo}.`);
@@ -158,7 +249,7 @@ async function main() {
         canale_origine: "manuale",
         fonte_dati: "csv",
         stato_generale: "aperta",
-        data_apertura: parseDataItaliana(riga.dataRegistrazione) || new Date().toISOString(),
+        data_apertura: dataRegistrazione || new Date().toISOString(),
         data_consegna_prevista: parseDataItaliana(riga.dataConsegna),
         descrizione: dettagliParti.join(" "),
       });
@@ -180,7 +271,7 @@ async function main() {
     .from("importazioni_csv")
     .update({
       righe_nuove: nuove,
-      righe_aggiornate: 0,
+      righe_aggiornate: ricollegate,
       righe_invariate: giaPresenti,
       righe_errore: errori,
       stato: errori > 0 ? "completata_con_errori" : "completata",
@@ -188,7 +279,9 @@ async function main() {
     })
     .eq("id", importazione.id);
 
-  console.log(`Import completata. Pratiche nuove: ${nuove}, gia' presenti: ${giaPresenti}, errori: ${errori}`);
+  console.log(
+    `Import completata. Pratiche nuove: ${nuove}, ricollegate a segnalazioni via mail: ${ricollegate}, gia' presenti: ${giaPresenti}, errori: ${errori}`
+  );
 }
 
 main().catch((err) => {
