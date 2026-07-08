@@ -53,7 +53,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node importVamartCsv.mjs ../../scraper/downloads/ultimo.csv
+        run: node importCommissioniAssistenza.mjs ../../scraper/downloads/ultimo.csv
 
       - name: Carica il CSV scaricato come artifact (debug)
         if: always()
