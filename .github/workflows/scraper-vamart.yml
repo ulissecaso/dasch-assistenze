@@ -1,0 +1,69 @@
+name: scraper-vamart
+
+# Scarica automaticamente da Vamart il CSV delle sole "commissioni di
+# assistenza" (usando l'export/filtro gia' presente nel portale) e lo importa
+# in Supabase, sostituendo il download/import manuale 1-2 volte al giorno.
+#
+# Richiede questi Repository secrets (Settings > Secrets and variables > Actions):
+#   VAMART_URL                  URL della pagina di login di Vamart
+#   VAMART_USER                 utente di login Vamart
+#   VAMART_PASS                 password di login Vamart
+#   SUPABASE_URL                stesso valore di SUPABASE_URL usato dall'app
+#   SUPABASE_SERVICE_ROLE_KEY   service role key di Supabase (mai la anon key)
+
+on:
+  schedule:
+    - cron: "0 7 * * 1-6"   # 08:00 Europe/Rome (UTC+1) da lunedi' a sabato
+    - cron: "0 13 * * 1-6"  # 14:00 Europe/Rome
+  workflow_dispatch: {}      # permette anche l'avvio manuale da GitHub
+
+jobs:
+  scrape-e-importa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Installa dipendenze scraper
+        working-directory: scraper
+        run: npm install
+
+      - name: Installa Chromium per Playwright
+        working-directory: scraper
+        run: npx playwright install --with-deps chromium
+
+      - name: Scarica CSV commissioni di assistenza da Vamart
+        working-directory: scraper
+        env:
+          GESTIONALE_URL: ${{ secrets.VAMART_URL }}
+          GESTIONALE_USER: ${{ secrets.VAMART_USER }}
+          GESTIONALE_PASS: ${{ secrets.VAMART_PASS }}
+        run: npm run download
+
+      - name: Installa dipendenze importatore
+        working-directory: scripts/import-csv
+        run: npm install
+
+      - name: Importa il CSV in Supabase
+        working-directory: scripts/import-csv
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node importVamartCsv.mjs ../../scraper/downloads/ultimo.csv
+
+      - name: Carica il CSV scaricato come artifact (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultimo-csv-vamart
+          path: scraper/downloads/ultimo.csv
+          retention-days: 14
+
+      - name: Notifica fallimento
+        if: failure()
+        run: |
+          echo "::error::Scraping/import Vamart fallito. Controllare il log del gestionale (cambio password, layout portale, 2FA) e importare manualmente nel frattempo."
