@@ -1,31 +1,35 @@
 // downloadCsvGestionale.mjs
-// Template di scraper automatico per il download programmato del CSV dal
-// portale del gestionale, quando questo non offre un export via API/email.
+// Scraper automatico per il download programmato, da Vamart, del CSV
+// "commissioni di assistenza" (filtro dedicato gia' presente nel portale:
+// pagina Commissioni -> filtro "Commissioni Assistenza" = "Solo di assistenza").
 //
-// Da personalizzare con: URL di login, selettori dei campi, percorso del
-// report/export, e credenziali (da variabili d'ambiente, MAI hardcoded).
+// Serve a intercettare anche le pratiche di assistenza aperte direttamente
+// dal personale su Vamart, che non passano dal flusso app/email del cliente
+// e quindi non arriverebbero altrimenti al sistema di monitoraggio.
 //
 // Richiede: npm install playwright && npx playwright install chromium
 //
-// Uso tipico:
+// Uso tipico (esegue solo il download):
 //   GESTIONALE_URL=... GESTIONALE_USER=... GESTIONALE_PASS=... \
 //     node downloadCsvGestionale.mjs
 //
-// Va poi incatenato all'importatore:
-//   node downloadCsvGestionale.mjs && node ../scripts/import-csv/importVamartCsv.mjs ./downloads/ultimo.csv
+// Pipeline completa (download + import in Supabase):
+//   npm run pipeline
 //
-// Pianificazione consigliata: cron di sistema, GitHub Actions schedule,
-// oppure un piccolo worker sempre attivo (Railway/Render) con node-cron.
+// Pianificazione: vedi .github/workflows/scraper-vamart.yml (GitHub Actions,
+// 2 volte al giorno, avviabile anche a mano).
 
 import { chromium } from "playwright";
 import { mkdirSync, renameSync, existsSync } from "node:fs";
 import path from "node:path";
 
 const {
-  GESTIONALE_URL,      // es. https://gestionale.azienda.it/login
+  GESTIONALE_URL,      // URL di login di Vamart, es. https://cinquegrana.azurewebsites.net/Account/Login
   GESTIONALE_USER,
   GESTIONALE_PASS,
   CARTELLA_DOWNLOAD = "./downloads",
+  // URL diretto della pagina "Commissioni": stabile, non serve passare dal menu.
+  VAMART_URL_COMMISSIONI = "https://cinquegrana.azurewebsites.net/Commissioni",
 } = process.env;
 
 async function scaricaCsv() {
@@ -39,41 +43,37 @@ async function scaricaCsv() {
   const page = await context.newPage();
 
   try {
-    // 1. LOGIN — selettori indicativi, da adattare al portale reale
+    // ── 1. LOGIN ──────────────────────────────────────────────────────────
     await page.goto(GESTIONALE_URL, { waitUntil: "networkidle" });
-    await page.fill('input[name="username"], #username, input[type="email"]', GESTIONALE_USER);
-    await page.fill('input[name="password"], #password, input[type="password"]', GESTIONALE_PASS);
-    await page.click('button[type="submit"], #loginButton');
+    await page.locator('input[type="text"], input[type="email"]').first().fill(GESTIONALE_USER);
+    await page.locator('input[type="password"]').first().fill(GESTIONALE_PASS);
+    await page.getByRole("button", { name: /accedi/i }).click();
     await page.waitForLoadState("networkidle");
 
-    // Verifica login riuscito (adattare al selettore reale, es. logo dashboard)
-    await page.waitForSelector("body", { timeout: 15000 });
+    // ── 2. NAVIGAZIONE alla pagina "Commissioni" ────────────────────────────
+    await page.goto(VAMART_URL_COMMISSIONI, { waitUntil: "networkidle" });
+    if (page.url().includes("/Account/Login")) {
+      throw new Error("Login su Vamart fallito: credenziali non valide o cambiate (controllare i secret GESTIONALE_USER/GESTIONALE_PASS).");
+    }
 
-    // 2. NAVIGAZIONE alla sezione di export (es. "Piano di carico")
-    // await page.click('text=Report');
-    // await page.click('text=Piano di carico');
+    // ── 3. FILTRO "Commissioni Assistenza" = "Solo di assistenza" ──────────
+    const selectAssistenza = page.locator(
+      'xpath=//label[contains(normalize-space(.),"Commissioni Assistenza")]/following::select[1] ' +
+      '| //*[contains(normalize-space(text()),"Commissioni Assistenza")]/following::select[1]'
+    ).first();
+    await selectAssistenza.selectOption({ label: "Solo di assistenza" });
+    await page.getByRole("button", { name: "Filtra" }).click();
+    await page.waitForLoadState("networkidle");
 
-    // 3. DOWNLOAD — Playwright intercetta l'evento di download del browser
+    // ── 4. DOWNLOAD CSV ──────────────────────────────────────────────────
+    // Nota: il pulsante "CSV" (DataTables) esporta di norma tutte le righe
+    // filtrate, non solo quelle della pagina visibile. Se in futuro il CSV
+    // dovesse risultare incompleto, controllare qui il dropdown "Visualizza"
+    // sopra la tabella (potrebbe servire portarlo al massimo prima di esportare).
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: 30000 }),
-      page.click('text=Esporta CSV, button:has-text("Esporta")'), // selettore indicativo
+      page.getByRole("button", { name: "CSV" }).click(),
     ]);
 
-    const nomeFile = `piano-di-carico-${new Date().toISOString().slice(0, 10)}.csv`;
-    const percorsoFinale = path.join(CARTELLA_DOWNLOAD, nomeFile);
-    await download.saveAs(percorsoFinale);
-
-    // mantiene anche un riferimento fisso "ultimo.csv" per lo step successivo della pipeline
-    renameSync(percorsoFinale, path.join(CARTELLA_DOWNLOAD, "ultimo.csv"));
-    console.log(`CSV scaricato: ${percorsoFinale}`);
-
-    return percorsoFinale;
-  } finally {
-    await browser.close();
-  }
-}
-
-scaricaCsv().catch((err) => {
-  console.error("Errore durante lo scraping del gestionale:", err);
-  process.exit(1);
-});
+    const nomeFile = `commissioni-assistenza-${new Date().toISOString().slice(0, 10)}.csv`;
+    const percorsoFinale =
