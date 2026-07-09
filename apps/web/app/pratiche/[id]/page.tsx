@@ -2,6 +2,7 @@
 // Schermata di dettaglio pratica: timeline fasi, righe/articoli, allegati, note, storico.
 import { notFound } from "next/navigation";
 import { richiediUtente } from "@/lib/auth/richiediUtente";
+import { dichiaraConfermaOrdine } from "./pratica-actions";
 
 export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
@@ -16,11 +17,15 @@ export default async function PraticaDettaglioPage({ params }: { params: { id: s
 
   if (!pratica) return notFound();
 
-  const [{ data: fasi }, { data: righe }, { data: allegati }, { data: storico }] = await Promise.all([
-    supabase.from("pratica_fasi").select("*, fasi_workflow(nome, ordine)").eq("pratica_id", params.id).order("fasi_workflow(ordine)"),
+  const [{ data: fasi }, { data: righe }, { data: allegati }, { data: storico }, { data: percentualeMerce }] = await Promise.all([
+    supabase.from("pratica_fasi").select("*, fasi_workflow(codice, nome, ordine)").eq("pratica_id", params.id).order("fasi_workflow(ordine)"),
     supabase.from("pratica_righe").select("*, fornitori(ragione_sociale)").eq("pratica_id", params.id),
     supabase.from("allegati").select("*").eq("pratica_id", params.id),
     supabase.from("storico_modifiche").select("*").eq("entita_id", params.id).order("modificato_il", { ascending: false }),
+    // Percentuale di merce arrivata in deposito (quantita_giacente +
+    // quantita_consegnata sul totale quantita_venduta), vedi vista
+    // v_percentuale_merce_arrivata (migrazione 0009_conferma_ordine.sql).
+    supabase.from("v_percentuale_merce_arrivata").select("percentuale_arrivata, quantita_totale, quantita_arrivata").eq("pratica_id", params.id).maybeSingle(),
   ]);
 
   return (
@@ -45,13 +50,33 @@ export default async function PraticaDettaglioPage({ params }: { params: { id: s
                   {f.data_effettiva && ` · effettiva: ${new Date(f.data_effettiva).toLocaleString("it-IT")}`}
                 </p>
                 {f.note && <p className="text-sm mt-1 italic">{f.note}</p>}
+                {f.fasi_workflow?.codice === "conferma_ordine" && f.stato !== "completata" && (
+                  <form action={dichiaraConfermaOrdine} className="mt-2">
+                    <input type="hidden" name="pratica_fase_id" value={f.id} />
+                    <input type="hidden" name="pratica_id" value={pratica.id} />
+                    <p className="text-xs text-amber-700 mb-1">
+                      Da fare solo dopo aver verificato di persona che l&#39;ordine è confermato: finché non lo dichiari, l&#39;arrivo merce resta bloccato anche se Vamart lo segnala già.
+                    </p>
+                    <button
+                      type="submit"
+                      className="rounded-md bg-amber-600 text-white text-sm font-medium px-3 py-1.5 hover:bg-amber-700"
+                    >
+                      Dichiaro: conferma ordine ricevuta
+                    </button>
+                  </form>
+                )}
               </li>
             ))}
           </ol>
         </div>
 
         <div className="bg-white rounded-xl shadow p-4">
-          <h2 className="text-lg font-medium mb-3">Righe / articoli ({(righe ?? []).length})</h2>
+          <h2 className="text-lg font-medium mb-1">Righe / articoli ({(righe ?? []).length})</h2>
+          {percentualeMerce && (
+            <p className="text-sm text-gray-500 mb-3">
+              Merce arrivata in deposito: {percentualeMerce.quantita_arrivata}/{percentualeMerce.quantita_totale} pezzi ({percentualeMerce.percentuale_arrivata}%)
+            </p>
+          )}
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-gray-500">
