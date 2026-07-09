@@ -9,6 +9,7 @@ export const ICONA_PER_FASE: Record<string, string> = {
   apertura_pratica: "doc",
   creazione_commissione: "doc",
   ordine_ricambi: "cart",
+  conferma_ordine: "check",
   arrivo_merce: "box",
   preparazione_intervento: "box",
   consegna_materiale: "truck",
@@ -21,6 +22,7 @@ export const AZIONE_PER_FASE: Record<string, string> = {
   apertura_pratica: "Aprire pratica",
   creazione_commissione: "Creare commissione",
   ordine_ricambi: "Inviare ordine ricambi",
+  conferma_ordine: "Dichiarare conferma ordine",
   arrivo_merce: "Verificare con fornitore",
   preparazione_intervento: "Preparare intervento",
   consegna_materiale: "Organizzare consegna",
@@ -82,25 +84,3 @@ export function calcolaLivelloDaRitardo(
     case "alert": return "alta";
     case "info": return "media";
     default: return "bassa";
-  }
-}
-
-export const PALETTE_OPERATORI = ["#ef4444", "#f97316", "#3b82f6", "#a855f7", "#14b8a6", "#eab308"];
-
-/** Colore stabile per operatore: usa colore_badge se impostato in admin,
- *  altrimenti ne deriva uno fisso dalla palette in base all'id (niente
- *  colori casuali che cambiano a ogni refresh). */
-export function coloreOperatore(id: string, coloreBadge?: string | null): string {
-  if (coloreBadge) return coloreBadge;
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return PALETTE_OPERATORI[hash % PALETTE_OPERATORI.length];
-}
-
-export function formattaScadenza(dataIso: string): { data: string; ora: string } {
-  const d = new Date(dataIso);
-  return {
-    data: d.toLocaleDateString("it-IT"),
-    ora: d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
-  };
-}
