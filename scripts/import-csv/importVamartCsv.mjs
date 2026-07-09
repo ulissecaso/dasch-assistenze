@@ -24,12 +24,17 @@
 //    (Ricezione segnalazione / Presa in carico / Apertura pratica / Creazione
 //    commissione), anche se nessuno le ha mai segnate completate su Dasch --
 //    vedi completaFasiPregresse.
-//  - fa avanzare automaticamente le fasi "Invio ordine ricambi", "Arrivo merce in
-//    deposito" e "Consegna materiale" guardando lo stato aggregato delle righe
-//    della pratica (Status: Da ordinare / Ordinato / In giacenza /
-//    Parzialmente consegnato / Consegnato) -- vedi sincronizzaFasiDaRighe.
+//  - fa avanzare automaticamente le fasi "Invio ordine ricambi" e "Consegna
+//    materiale" guardando lo stato aggregato delle righe della pratica
+//    (Status: Da ordinare / Ordinato / In giacenza / Parzialmente consegnato
+//    / Consegnato) -- vedi sincronizzaFasiDaRighe.
+//    "Arrivo merce in deposito" e' invece SEMPRE bloccata finche' l'operatore
+//    non dichiara manualmente "Conferma ordine" sulla schermata pratica (fase
+//    conferma_ordine, mai gestita in automatico da questo importatore): e'
+//    un controllo umano voluto, anche se Vamart segnala gia' merce arrivata.
 //    Il cronometro di ogni fase riparte da solo grazie al trigger DB
-//    trg_pratica_fasi_avvia_cronometro (migrazione 0009).
+//    trg_pratica_fasi_avvia_cronometro (creato a mano su Supabase, vedi
+//    migrazione 0009_conferma_ordine.sql per il contesto completo).
 //
 // Questo modulo e' pensato per essere lanciato manualmente, da uno scheduler (cron) o
 // invocato dallo scraper automatico (vedi /scraper) subito dopo il download del file.
@@ -65,17 +70,19 @@ async function main() {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  // Fasi che questo importatore fa avanzare in base allo stato delle righe.
-  // Risolte per codice (non id fisso), cosi' restano valide anche se
-  // qualcuno le ricrea dal pannello admin.
+  // Fasi che questo importatore fa avanzare (o legge) in base allo stato
+  // delle righe. Risolte per codice (non id fisso), cosi' restano valide
+  // anche se qualcuno le ricrea dal pannello admin. "conferma_ordine" viene
+  // solo LETTA (mai scritta automaticamente): serve per bloccare l'avanzamento
+  // di "arrivo_merce" finche' l'operatore non l'ha dichiarata a mano.
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
     .select("id, codice")
-    .in("codice", ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "arrivo_merce", "consegna_materiale"]);
+    .in("codice", ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "conferma_ordine", "arrivo_merce", "consegna_materiale"]);
   if (erroreFasi) throw erroreFasi;
   const fasiIds = Object.fromEntries(fasiWorkflow.map((f) => [f.codice, f.id]));
-  for (const codice of ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "arrivo_merce", "consegna_materiale"]) {
-    if (!fasiIds[codice]) throw new Error(`Fase '${codice}' non trovata in fasi_workflow`);
+  for (const codice of ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "conferma_ordine", "arrivo_merce", "consegna_materiale"]) {
+    if (!fasiIds[codice]) throw new Error(`Fase '${codice}' non trovata in fasi_workflow (hai gia' applicato la migrazione 0009_conferma_ordine.sql?)`);
   }
 
   console.log(`Lettura file: ${percorsoFile}`);
@@ -105,8 +112,8 @@ async function main() {
       // contiene TUTTE le commissioni Vamart, comprese le vendite normali:
       // se non esiste gia' una pratica di assistenza con questo codice
       // (creata dalla segnalazione mail o dall'import "Commissioni - Solo
-      // di assistenza"), questa riga non riguarda l'assistenza e va
-      // ignorata, non creata.
+      // di assistenza", vedi importCommissioniAssistenza.mjs), questa riga
+      // non riguarda l'assistenza e va ignorata, non creata.
       const { data: praticaEsistente } = await supabase
         .from("pratiche")
         .select("*")
@@ -291,6 +298,16 @@ async function completaFasiPregresse(supabase, praticaId, righe, fasiIds) {
 // Le condizioni sono indipendenti (non solo sequenziali): se un import
 // arriva con le righe gia' tutte "Consegnato" senza essere mai passate da
 // noi per gli step intermedi, completa comunque anche le fasi precedenti.
+//
+// ECCEZIONE IMPORTANTE: "arrivo_merce" (e quindi anche "consegna_materiale"
+// a cascata) NON avanza mai finche' l'operatore non ha dichiarato a mano la
+// fase "conferma_ordine" sulla schermata pratica (pulsante "Dichiaro:
+// conferma ordine ricevuta"). E' un controllo umano voluto: anche se Vamart
+// segnala gia' merce in giacenza o consegnata, il sistema resta fermo su
+// "conferma ordine" finche' un operatore non conferma di aver verificato di
+// persona l'ordine. Se le righe risultano gia' tutte ordinate e la fase
+// "conferma_ordine" e' ancora da_iniziare, la attiviamo (in_corso) cosi'
+// compare tra le cose da fare dell'operatore.
 // ---------------------------------------------------------------------
 const STATI_ORDINATO_O_OLTRE = new Set(["Ordinato", "In giacenza", "Parzialmente consegnato", "Consegnato"]);
 const STATI_ARRIVATO_O_OLTRE = new Set(["In giacenza", "Parzialmente consegnato", "Consegnato"]);
@@ -306,14 +323,34 @@ async function sincronizzaFasiDaRighe(supabase, praticaId, righe, fasiIds) {
     .from("pratica_fasi")
     .select("id, fase_id, stato")
     .eq("pratica_id", praticaId)
-    .in("fase_id", [fasiIds.ordine_ricambi, fasiIds.arrivo_merce, fasiIds.consegna_materiale]);
+    .in("fase_id", [fasiIds.ordine_ricambi, fasiIds.conferma_ordine, fasiIds.arrivo_merce, fasiIds.consegna_materiale]);
 
   const perFase = Object.fromEntries((fasiAttuali ?? []).map((f) => [f.fase_id, f]));
 
+  // Appena tutte le righe risultano ordinate, la fase "conferma_ordine"
+  // diventa attuale (da_iniziare -> in_corso), cosi' l'operatore la vede tra
+  // le cose da fare. Usiamo la condizione grezza (tutteOrdinate) e non lo
+  // stato gia' letto di "ordine_ricambi", perche' quest'ultimo potrebbe
+  // completarsi solo pochi istanti dopo, piu' sotto in questa stessa
+  // esecuzione (fasiAttuali e' stato letto prima di quell'update).
+  const faseConfermaOrdine = perFase[fasiIds.conferma_ordine];
+  if (tutteOrdinate && faseConfermaOrdine && faseConfermaOrdine.stato === "da_iniziare") {
+    await supabase.from("pratica_fasi").update({ stato: "in_corso" }).eq("id", faseConfermaOrdine.id);
+  }
+  const confermaOrdineFatta = faseConfermaOrdine?.stato === "completata";
+
   const passaggi = [
     { faseId: fasiIds.ordine_ricambi, condizione: tutteOrdinate, nota: "Tutte le righe risultano ordinate su Vamart (Piano di Carico)." },
-    { faseId: fasiIds.arrivo_merce, condizione: tutteArrivate, nota: "Tutte le righe risultano arrivate in giacenza su Vamart (Piano di Carico)." },
-    { faseId: fasiIds.consegna_materiale, condizione: tutteConsegnate, nota: "Tutte le righe risultano consegnate su Vamart (Piano di Carico)." },
+    {
+      faseId: fasiIds.arrivo_merce,
+      condizione: tutteArrivate && confermaOrdineFatta,
+      nota: "Tutte le righe risultano arrivate in giacenza su Vamart (Piano di Carico), dopo conferma ordine dichiarata dall'operatore.",
+    },
+    {
+      faseId: fasiIds.consegna_materiale,
+      condizione: tutteConsegnate && confermaOrdineFatta,
+      nota: "Tutte le righe risultano consegnate su Vamart (Piano di Carico).",
+    },
   ];
 
   for (const [indice, passaggio] of passaggi.entries()) {
