@@ -122,9 +122,23 @@ export async function elaboraSegnalazione(
   // Nessuna pratica attiva per questa commissione: la creiamo. Se esistono
   // solo pratiche passate (tutte chiuse/annullate) per la stessa commissione,
   // usiamo un codice con suffisso per tenerle distinte.
+  //
+  // IMPORTANTE: dati.commissione è il numero che il CLIENTE ha scritto nella
+  // mail come riferimento a un intervento precedente — NON è il codice della
+  // nuova commissione di assistenza. Vamart assegnerà un numero nuovo e
+  // diverso quando l'operatore la creerà (regola confermata dal Direttore).
+  // Usiamo quindi un codice provvisorio "IN-ATTESA-..." finché
+  // l'importatore da Vamart (importCommissioniAssistenza.mjs) non trova - per
+  // nome cliente - la vera commissione e la ricollega. Non usare mai
+  // dati.commissione come codice_commissione: è già un numero Vamart
+  // esistente (di solito già chiuso), riusarlo creerebbe confusione con la
+  // pratica storica e rischio di importare dati sbagliati dal Piano di Carico.
   const numeroPrecedenti = praticheEsistenti?.length ?? 0;
+  const riferimentoSicuro = dati.commissione.replace(/\//g, "-");
   const codiceCommissione =
-    numeroPrecedenti === 0 ? dati.commissione : `${dati.commissione}-${suffissoIntervento(numeroPrecedenti)}`;
+    numeroPrecedenti === 0
+      ? `IN-ATTESA-${riferimentoSicuro}`
+      : `IN-ATTESA-${riferimentoSicuro}-${suffissoIntervento(numeroPrecedenti)}`;
 
   const { data: nuovaPratica, error: erroreInsert } = await supabase
     .from("pratiche")
