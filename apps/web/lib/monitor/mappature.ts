@@ -84,3 +84,49 @@ export function calcolaLivelloDaRitardo(
     case "alert": return "alta";
     case "info": return "media";
     default: return "bassa";
+  }
+}
+
+/** Soglia di default (%) di merce arrivata in deposito oltre la quale una
+ *  pratica ancora "in ritardo" sulla fase arrivo_merce viene comunque
+ *  segnalata come "parzialmente pronta" invece che genericamente "in
+ *  ritardo". Valore fisso nel codice (non configurabile da pannello admin,
+ *  a differenza delle soglie SLA): per cambiarlo serve un intervento di
+ *  sviluppo. Il dato reale (quantita' ordinata/arrivata) viene letto dalla
+ *  vista v_percentuale_merce_arrivata, alimentata dalle righe del Piano di
+ *  Carico Vamart (vedi scripts/import-csv/importVamartCsv.mjs). */
+export const SOGLIA_MERCE_PARZIALE = 80;
+
+/** Restituisce l'etichetta "Merce parzialmente pronta in deposito (NN%)"
+ *  quando la percentuale di merce arrivata supera la soglia ma non ha
+ *  ancora raggiunto il 100% (nel qual caso la fase risulta gia' completata
+ *  e non compare piu' tra gli alert). Restituisce null se non applicabile:
+ *  in quel caso il chiamante usa la descrizione generica della fase. */
+export function etichettaArrivoMerce(percentualeArrivata: number | null | undefined): string | null {
+  if (percentualeArrivata == null) return null;
+  if (percentualeArrivata >= 100) return null;
+  if (percentualeArrivata >= SOGLIA_MERCE_PARZIALE) {
+    return `Merce parzialmente pronta in deposito (${percentualeArrivata}%)`;
+  }
+  return null;
+}
+
+export const PALETTE_OPERATORI = ["#ef4444", "#f97316", "#3b82f6", "#a855f7", "#14b8a6", "#eab308"];
+
+/** Colore stabile per operatore: usa colore_badge se impostato in admin,
+ *  altrimenti ne deriva uno fisso dalla palette in base all'id (niente
+ *  colori casuali che cambiano a ogni refresh). */
+export function coloreOperatore(id: string, coloreBadge?: string | null): string {
+  if (coloreBadge) return coloreBadge;
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return PALETTE_OPERATORI[hash % PALETTE_OPERATORI.length];
+}
+
+export function formattaScadenza(dataIso: string): { data: string; ora: string } {
+  const d = new Date(dataIso);
+  return {
+    data: d.toLocaleDateString("it-IT"),
+    ora: d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
+  };
+}
