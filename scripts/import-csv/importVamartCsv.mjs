@@ -1,16 +1,35 @@
 // importVamartCsv.mjs
-// Importatore CSV "Piano di carico" -> Supabase (pratiche / pratica_righe / clienti / fornitori)
+// Importatore CSV "Piano di carico" -> Supabase (pratica_righe + avanzamento fasi)
 //
 // Uso:
 //   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node importVamartCsv.mjs "/percorso/Piano di carico.csv"
 //
+// IMPORTANTE: il Piano di Carico esportato da Vamart contiene TUTTE le
+// commissioni (vendite normali comprese), non solo quelle di assistenza.
+// Per questo motivo questo importatore NON crea mai nuove pratiche: si
+// limita ad aggiornare pratiche di assistenza gia' esistenti (create dalla
+// segnalazione mail oppure dall'importatore "Commissioni - Solo di
+// assistenza", vedi importCommissioniAssistenza.mjs). Se una riga del Piano
+// di Carico non corrisponde a nessuna pratica esistente, viene ignorata:
+// significa che quella commissione non e' di assistenza.
+//
 // Comportamento:
 //  - riconosce pratiche esistenti tramite codice_commissione (chiave naturale del gestionale)
-//  - crea clienti/fornitori mancanti
-//  - crea pratiche nuove, aggiorna quelle esistenti solo se cambia lo stato_generale derivato
+//  - ignora le righe la cui commissione non corrisponde a nessuna pratica di assistenza esistente
 //  - per ogni riga: crea la riga se nuova, aggiorna solo i campi cambiati (via riga_hash) e
 //    scrive un evento in storico_modifiche
 //  - registra la sessione di importazione in importazioni_csv (+ errori riga per riga)
+//  - se dal Piano di Carico risulta gia' un ordine piazzato (Status: Ordinato o
+//    oltre) per almeno una riga, considera "gia' avvenute" anche le fasi a monte
+//    (Ricezione segnalazione / Presa in carico / Apertura pratica / Creazione
+//    commissione), anche se nessuno le ha mai segnate completate su Dasch --
+//    vedi completaFasiPregresse.
+//  - fa avanzare automaticamente le fasi "Invio ordine ricambi", "Arrivo merce in
+//    deposito" e "Consegna materiale" guardando lo stato aggregato delle righe
+//    della pratica (Status: Da ordinare / Ordinato / In giacenza /
+//    Parzialmente consegnato / Consegnato) -- vedi sincronizzaFasiDaRighe.
+//    Il cronometro di ogni fase riparte da solo grazie al trigger DB
+//    trg_pratica_fasi_avvia_cronometro (migrazione 0009).
 //
 // Questo modulo e' pensato per essere lanciato manualmente, da uno scheduler (cron) o
 // invocato dallo scraper automatico (vedi /scraper) subito dopo il download del file.
@@ -46,6 +65,19 @@ async function main() {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+  // Fasi che questo importatore fa avanzare in base allo stato delle righe.
+  // Risolte per codice (non id fisso), cosi' restano valide anche se
+  // qualcuno le ricrea dal pannello admin.
+  const { data: fasiWorkflow, error: erroreFasi } = await supabase
+    .from("fasi_workflow")
+    .select("id, codice")
+    .in("codice", ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "arrivo_merce", "consegna_materiale"]);
+  if (erroreFasi) throw erroreFasi;
+  const fasiIds = Object.fromEntries(fasiWorkflow.map((f) => [f.codice, f.id]));
+  for (const codice of ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "arrivo_merce", "consegna_materiale"]) {
+    if (!fasiIds[codice]) throw new Error(`Fase '${codice}' non trovata in fasi_workflow`);
+  }
+
   console.log(`Lettura file: ${percorsoFile}`);
   const { righe, errori: erroriParsing } = parseFileCompleto(percorsoFile);
   const pratiche = raggruppaInPratiche(righe);
@@ -65,73 +97,44 @@ async function main() {
     .single();
   if (erroreImport) throw erroreImport;
 
-  let nuove = 0, aggiornate = 0, invariate = 0, righeErrore = 0;
+  let nuove = 0, aggiornate = 0, invariate = 0, ignorate = 0, righeErrore = 0;
 
   for (const pratica of pratiche) {
     try {
-      // upsert cliente (match per nome_completo)
-      const { data: clienteEsistente } = await supabase
-        .from("clienti")
-        .select("id")
-        .eq("nome_completo", pratica.cliente)
-        .maybeSingle();
-
-      let clienteId = clienteEsistente?.id;
-      if (!clienteId) {
-        const { data: nuovoCliente, error } = await supabase
-          .from("clienti")
-          .insert({ nome_completo: pratica.cliente })
-          .select()
-          .single();
-        if (error) throw error;
-        clienteId = nuovoCliente.id;
-      }
-
-      // upsert pratica (match per codice_commissione)
+      // upsert pratica (match per codice_commissione). Il Piano di Carico
+      // contiene TUTTE le commissioni Vamart, comprese le vendite normali:
+      // se non esiste gia' una pratica di assistenza con questo codice
+      // (creata dalla segnalazione mail o dall'import "Commissioni - Solo
+      // di assistenza"), questa riga non riguarda l'assistenza e va
+      // ignorata, non creata.
       const { data: praticaEsistente } = await supabase
         .from("pratiche")
         .select("*")
         .eq("codice_commissione", pratica.codice_commissione)
         .maybeSingle();
 
-      let praticaId;
       if (!praticaEsistente) {
-        const { data: nuovaPratica, error } = await supabase
+        ignorate++;
+        continue;
+      }
+
+      const praticaId = praticaEsistente.id;
+      if (praticaEsistente.stato_generale !== pratica.stato_generale) {
+        await supabase
           .from("pratiche")
-          .insert({
-            codice_commissione: pratica.codice_commissione,
-            cliente_id: clienteId,
-            tipo: pratica.tipo,
-            categoria: pratica.categoria,
-            canale_origine: "csv",
-            fonte_dati: "csv",
-            stato_generale: pratica.stato_generale,
-            data_consegna_prevista: pratica.data_consegna_cliente,
-          })
-          .select()
-          .single();
-        if (error) throw error;
-        praticaId = nuovaPratica.id;
-        nuove++;
+          .update({ stato_generale: pratica.stato_generale })
+          .eq("id", praticaId);
+        await supabase.from("storico_modifiche").insert({
+          entita: "pratica",
+          entita_id: praticaId,
+          campo: "stato_generale",
+          valore_precedente: praticaEsistente.stato_generale,
+          valore_nuovo: pratica.stato_generale,
+          origine: "importazione_csv",
+        });
+        aggiornate++;
       } else {
-        praticaId = praticaEsistente.id;
-        if (praticaEsistente.stato_generale !== pratica.stato_generale) {
-          await supabase
-            .from("pratiche")
-            .update({ stato_generale: pratica.stato_generale })
-            .eq("id", praticaId);
-          await supabase.from("storico_modifiche").insert({
-            entita: "pratica",
-            entita_id: praticaId,
-            campo: "stato_generale",
-            valore_precedente: praticaEsistente.stato_generale,
-            valore_nuovo: pratica.stato_generale,
-            origine: "importazione_csv",
-          });
-          aggiornate++;
-        } else {
-          invariate++;
-        }
+        invariate++;
       }
 
       // upsert righe della pratica
@@ -205,6 +208,12 @@ async function main() {
           });
         }
       }
+
+      // Se dal Piano di Carico risulta gia' un ordine piazzato, le fasi a
+      // monte sono evidentemente gia' avvenute anche se nessuno le ha
+      // segnate su Dasch: le completiamo prima di sincronizzare il resto.
+      await completaFasiPregresse(supabase, praticaId, pratica.righe, fasiIds);
+      await sincronizzaFasiDaRighe(supabase, praticaId, pratica.righe, fasiIds);
     } catch (err) {
       righeErrore++;
       await supabase.from("importazioni_csv_errori").insert({
@@ -237,7 +246,101 @@ async function main() {
     })
     .eq("id", importazione.id);
 
-  console.log(`Import completata. Pratiche nuove: ${nuove}, aggiornate: ${aggiornate}, invariate: ${invariate}, errori: ${righeErrore + erroriParsing.length}`);
+  console.log(`Import completata. Pratiche aggiornate: ${aggiornate}, invariate: ${invariate}, ignorate (non di assistenza): ${ignorate}, errori: ${righeErrore + erroriParsing.length}`);
+}
+
+// ---------------------------------------------------------------------
+// Se dal Piano di Carico risulta gia' almeno una riga con Status "Ordinato"
+// o oltre, significa che l'ordine e' evidentemente gia' partito su Vamart:
+// completiamo retroattivamente anche le fasi a monte (Ricezione
+// segnalazione / Presa in carico / Apertura pratica / Creazione
+// commissione) se non lo sono gia', anche se nessun operatore le ha mai
+// segnate completate a mano su Dasch. Evita falsi allarmi "presa in carico
+// in ritardo" su pratiche in realta' gia' avanzate da mesi.
+// ---------------------------------------------------------------------
+async function completaFasiPregresse(supabase, praticaId, righe, fasiIds) {
+  const almenoUnaOrdinata = righe.some((r) => STATI_ORDINATO_O_OLTRE.has(r.status));
+  if (!almenoUnaOrdinata) return;
+
+  const { data: fasiPregresse } = await supabase
+    .from("pratica_fasi")
+    .select("id")
+    .eq("pratica_id", praticaId)
+    .in("fase_id", [fasiIds.ricezione, fasiIds.presa_in_carico, fasiIds.apertura_pratica, fasiIds.creazione_commissione])
+    .neq("stato", "completata");
+
+  if (!fasiPregresse || fasiPregresse.length === 0) return;
+
+  await supabase
+    .from("pratica_fasi")
+    .update({
+      stato: "completata",
+      data_effettiva: new Date().toISOString(),
+      note: "Completata automaticamente: risulta gia' un ordine piazzato su Vamart (Piano di Carico), la fase e' evidentemente gia' avvenuta.",
+    })
+    .in("id", fasiPregresse.map((f) => f.id));
+}
+
+// ---------------------------------------------------------------------
+// Fa avanzare "Invio ordine ricambi" / "Arrivo merce in deposito" /
+// "Consegna materiale" in base allo stato aggregato delle righe della
+// pratica. Ogni fase si completa solo quando TUTTE le righe hanno
+// raggiunto (almeno) lo stato corrispondente -- se anche una sola riga e'
+// rimasta indietro, la fase resta aperta e il motore di alert la segnala
+// secondo le soglie configurate dal pannello admin.
+// Le condizioni sono indipendenti (non solo sequenziali): se un import
+// arriva con le righe gia' tutte "Consegnato" senza essere mai passate da
+// noi per gli step intermedi, completa comunque anche le fasi precedenti.
+// ---------------------------------------------------------------------
+const STATI_ORDINATO_O_OLTRE = new Set(["Ordinato", "In giacenza", "Parzialmente consegnato", "Consegnato"]);
+const STATI_ARRIVATO_O_OLTRE = new Set(["In giacenza", "Parzialmente consegnato", "Consegnato"]);
+
+async function sincronizzaFasiDaRighe(supabase, praticaId, righe, fasiIds) {
+  if (!righe || righe.length === 0) return;
+
+  const tutteOrdinate = righe.every((r) => STATI_ORDINATO_O_OLTRE.has(r.status));
+  const tutteArrivate = righe.every((r) => STATI_ARRIVATO_O_OLTRE.has(r.status));
+  const tutteConsegnate = righe.every((r) => r.status === "Consegnato");
+
+  const { data: fasiAttuali } = await supabase
+    .from("pratica_fasi")
+    .select("id, fase_id, stato")
+    .eq("pratica_id", praticaId)
+    .in("fase_id", [fasiIds.ordine_ricambi, fasiIds.arrivo_merce, fasiIds.consegna_materiale]);
+
+  const perFase = Object.fromEntries((fasiAttuali ?? []).map((f) => [f.fase_id, f]));
+
+  const passaggi = [
+    { faseId: fasiIds.ordine_ricambi, condizione: tutteOrdinate, nota: "Tutte le righe risultano ordinate su Vamart (Piano di Carico)." },
+    { faseId: fasiIds.arrivo_merce, condizione: tutteArrivate, nota: "Tutte le righe risultano arrivate in giacenza su Vamart (Piano di Carico)." },
+    { faseId: fasiIds.consegna_materiale, condizione: tutteConsegnate, nota: "Tutte le righe risultano consegnate su Vamart (Piano di Carico)." },
+  ];
+
+  for (const [indice, passaggio] of passaggi.entries()) {
+    const faseCorrente = perFase[passaggio.faseId];
+    if (!faseCorrente || faseCorrente.stato === "completata" || !passaggio.condizione) continue;
+
+    await supabase
+      .from("pratica_fasi")
+      .update({ stato: "completata", data_effettiva: new Date().toISOString(), note: passaggio.nota })
+      .eq("id", faseCorrente.id);
+
+    const prossimoPassaggio = passaggi[indice + 1];
+    if (prossimoPassaggio) {
+      const faseSuccessiva = perFase[prossimoPassaggio.faseId];
+      if (faseSuccessiva && faseSuccessiva.stato === "da_iniziare") {
+        await supabase.from("pratica_fasi").update({ stato: "in_corso" }).eq("id", faseSuccessiva.id);
+      }
+    } else {
+      // Era l'ultimo passaggio (consegna_materiale): la pratica e' di
+      // fatto conclusa, non deve piu' comparire tra quelle aperte/in ritardo.
+      await supabase
+        .from("pratiche")
+        .update({ stato_generale: "chiusa", data_chiusura_effettiva: new Date().toISOString() })
+        .eq("id", praticaId)
+        .not("stato_generale", "in", "(chiusa,annullata)");
+    }
+  }
 }
 
 main().catch((err) => {
