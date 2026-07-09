@@ -193,12 +193,26 @@ async function main() {
           })
           .eq("id", faseCreazione.id);
 
-        await supabase
-          .from("pratica_fasi")
-          .update({ stato: "in_corso" })
-          .eq("pratica_id", pratica.id)
-          .eq("fase_id", faseOrdineRicambiId)
-          .eq("stato", "da_iniziare");
+      const { error: erroreAggiornamentoCodice } = await supabase
+        .from("pratiche")
+        .update({ codice_commissione: codiceCommissione })
+        .eq("id", pratica.id);
+      if (erroreAggiornamentoCodice) throw erroreAggiornamentoCodice;
+
+      await supabase.from("storico_modifiche").insert({
+        entita: "pratiche",
+        entita_id: pratica.id,
+        campo: "codice_commissione",
+        valore_nuovo: codiceCommissione,
+        origine: "scraper_automatico",
+      });
+
+      await supabase
+        .from("pratica_fasi")
+        .update({ stato: "in_corso" })
+        .eq("pratica_id", pratica.id)
+        .eq("fase_id", faseOrdineRicambiId)
+        .eq("stato", "da_iniziare");
 
         await supabase.from("storico_modifiche").insert({
           entita: "pratiche",
