@@ -10,7 +10,7 @@
 // invece di un tetto fisso.
 import { richiediUtente } from "@/lib/auth/richiediUtente";
 import MonitorBoard, { type AlertRigaMonitor, type OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo } from "@/lib/monitor/mappature";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce } from "@/lib/monitor/mappature";
 
 export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
@@ -54,6 +54,20 @@ export default async function DashboardOperatorePage() {
       return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };
     });
 
+  // Percentuale di merce arrivata in deposito per le pratiche dell'operatore
+  // ancora ferme su "arrivo_merce": stessa logica della dashboard direzione.
+  const idPraticheArrivoMerce = righeConLivello
+    .filter((r: any) => r.fasi_workflow?.codice === "arrivo_merce")
+    .map((r: any) => r.pratiche.id);
+  const mappaPercentualeMerce = new Map<string, number>();
+  if (idPraticheArrivoMerce.length > 0) {
+    const { data: percentuali } = await supabase
+      .from("v_percentuale_merce_arrivata")
+      .select("pratica_id, percentuale_arrivata")
+      .in("pratica_id", idPraticheArrivoMerce);
+    for (const p of percentuali ?? []) mappaPercentualeMerce.set(p.pratica_id, p.percentuale_arrivata);
+  }
+
   const opColore = coloreOperatore(user.id, profilo?.colore_badge);
   const opNome = profilo ? `${profilo.nome} ${profilo.cognome}` : "Operatore";
 
@@ -69,6 +83,7 @@ export default async function DashboardOperatorePage() {
     const p = r.pratiche;
     const fw = r.fasi_workflow;
     const { data, ora } = formattaScadenza(r.data_prevista);
+    const etichettaParziale = fw?.codice === "arrivo_merce" ? etichettaArrivoMerce(mappaPercentualeMerce.get(p.id)) : null;
     return {
       id: r.id,
       livello: r.livello,
@@ -78,7 +93,7 @@ export default async function DashboardOperatorePage() {
       cliente: p.clienti?.nome_completo ?? "—",
       faseNome: fw?.nome ?? "Fase",
       faseIcona: ICONA_PER_FASE[fw?.codice] ?? "warn-sm",
-      descrizione: `${fw?.nome ?? "Fase"} in ritardo`,
+      descrizione: etichettaParziale ?? `${fw?.nome ?? "Fase"} in ritardo`,
       operatoreNome: opNome,
       operatoreColore: opColore,
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
