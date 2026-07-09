@@ -16,7 +16,27 @@ export async function caricaDatiDirezione(supabase: any) {
   const adesso = new Date().toISOString();
   const adessoMs = Date.now();
 
-  const [{ data: faseRitardo }, { data: operatoriAttivi }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
+  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriAttivi }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
+    // Query "conteggio": alimenta le card per operatore e le statistiche
+    // (scaduti, in scadenza oggi, urgenti...). Volutamente SENZA il limite
+    // usato per la tabella: se la limitassimo, un operatore con tante fasi
+    // vecchie in ritardo "ruberebbe" spazio ad altri e i conteggi per
+    // operatore risulterebbero troncati e sbagliati (visti anche solo 71 su
+    // 241 reali per un operatore). Selezioniamo solo i campi indispensabili
+    // per il conteggio, per tenere leggera una query senza limite di righe.
+    supabase
+      .from("pratica_fasi")
+      .select(`
+        id, data_prevista, fase_id,
+        pratiche(id, stato_generale, operatore_assegnato_id)
+      `)
+      .in("stato", ["da_iniziare", "in_corso"])
+      .lt("data_prevista", adesso)
+      .limit(5000),
+    // Query "tabella": righe da mostrare nel Monitor Assistenze, ordinate
+    // dalla più urgente (più vecchia) in su. Questo limite serve solo a
+    // contenere il payload della tabella: la vista a parete la taglia
+    // ulteriormente a righeMax (11) tramite MonitorBoard.
     supabase
       .from("pratica_fasi")
       .select(`
@@ -43,16 +63,22 @@ export async function caricaDatiDirezione(supabase: any) {
   // una loro fase è rimasta con data_prevista scaduta: filtro qui perché
   // PostgREST non permette di filtrare comodamente su una colonna della
   // relazione embedded direttamente nella query.
-  const righeConLivello = (faseRitardo ?? [])
-    .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale))
-    .map((r: any) => {
-      const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
-      return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };
-    });
+  const conLivello = (righe: any[] | null | undefined) =>
+    (righe ?? [])
+      .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale))
+      .map((r: any) => {
+        const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
+        return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };
+      });
+
+  // Usata per conteggi/statistiche: SENZA il limite della tabella.
+  const righeConLivelloConteggio = conLivello(faseRitardoConteggio);
+  // Usata solo per le righe mostrate nella tabella del monitor.
+  const righeConLivelloTabella = conLivello(faseRitardoTabella);
 
   const oggi = oggiIso();
   const RANGO_LIVELLO = { critica: 0, alta: 1, media: 2, bassa: 3 } as const;
-  const righeOrdinate = [...righeConLivello].sort((a: any, b: any) => {
+  const righeOrdinate = [...righeConLivelloTabella].sort((a: any, b: any) => {
     const rangoA = RANGO_LIVELLO[a.livello as keyof typeof RANGO_LIVELLO];
     const rangoB = RANGO_LIVELLO[b.livello as keyof typeof RANGO_LIVELLO];
     if (rangoA !== rangoB) return rangoA - rangoB;
@@ -80,8 +106,10 @@ export async function caricaDatiDirezione(supabase: any) {
     };
   });
 
+  // Le card per operatore e le statistiche usano SEMPRE il set completo
+  // (righeConLivelloConteggio), mai quello troncato della tabella.
   const operatori: OperatoreCardMonitor[] = (operatoriAttivi ?? []).map((op: any) => {
-    const righeOp = righeConLivello.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
+    const righeOp = righeConLivelloConteggio.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
     return {
       id: op.id,
       nome: `${op.nome} ${op.cognome}`,
@@ -91,15 +119,15 @@ export async function caricaDatiDirezione(supabase: any) {
     };
   });
 
-  const scaduti = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
-  const inScadenzaOggi = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
+  const scaduti = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
+  const inScadenzaOggi = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
   return {
     alertRows,
     operatori,
     stats: {
-      allertTotali: alertRows.length,
-      allertUrgenti: alertRows.filter((r) => r.livello === "critica").length,
+      allertTotali: righeConLivelloConteggio.length,
+      allertUrgenti: righeConLivelloConteggio.filter((r) => r.livello === "critica").length,
       scaduti,
       inScadenzaOggi,
       risoltiOggi: risoltiOggi ?? 0,
