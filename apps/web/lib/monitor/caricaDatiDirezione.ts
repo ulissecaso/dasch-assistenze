@@ -6,36 +6,10 @@
 // utente o service role, indifferentemente) così la logica di calcolo resta
 // un'unica fonte di verità.
 import type { AlertRigaMonitor, OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza } from "@/lib/monitor/mappature";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo } from "@/lib/monitor/mappature";
 
 function oggiIso() {
   return new Date().toISOString().slice(0, 10);
-}
-
-// La priorità mostrata a monitor NON usa più la colonna statica
-// `pratiche.priorita` (che restava quasi sempre "normale" e non rifletteva
-// mai il vero ritardo accumulato). Viene invece calcolata al volo per ogni
-// fase in ritardo confrontando le ore di ritardo con le soglie configurate
-// in `regole_alert` per quella specifica fase (le stesse soglie usate per le
-// notifiche/escalation, cosi' la dashboard e gli alert restano coerenti).
-type RegolaSoglia = { sogliaOre: number; livello: string };
-
-function calcolaLivelloDaRitardo(
-  regolePerFase: Map<string, RegolaSoglia[]>,
-  faseId: string,
-  oreRitardo: number
-): "critica" | "alta" | "media" | "bassa" {
-  const regole = regolePerFase.get(faseId) ?? [];
-  const soddisfatte = regole
-    .filter((r) => oreRitardo >= r.sogliaOre)
-    .sort((a, b) => b.sogliaOre - a.sogliaOre);
-  if (soddisfatte.length === 0) return "bassa";
-  switch (soddisfatte[0].livello) {
-    case "escalation": return "critica";
-    case "alert": return "alta";
-    case "info": return "media";
-    default: return "bassa";
-  }
 }
 
 export async function caricaDatiDirezione(supabase: any) {
@@ -63,14 +37,7 @@ export async function caricaDatiDirezione(supabase: any) {
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
   ]);
 
-  const regolePerFase = new Map<string, RegolaSoglia[]>();
-  for (const r of regoleAttive ?? []) {
-    if (!r.fase_id) continue;
-    const sogliaOre = r.soglia_unita === "giorni" ? r.soglia_valore * 24 : r.soglia_valore;
-    const lista = regolePerFase.get(r.fase_id) ?? [];
-    lista.push({ sogliaOre, livello: r.livello });
-    regolePerFase.set(r.fase_id, lista);
-  }
+  const regolePerFase = costruisciMappaRegole(regoleAttive);
 
   // Le pratiche già chiuse/annullate non contano come "in ritardo" anche se
   // una loro fase è rimasta con data_prevista scaduta: filtro qui perché
