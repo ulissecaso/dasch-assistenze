@@ -2,9 +2,15 @@
 // Stesso "Monitor Assistenze" della dashboard direzione, ma con i dati già
 // ristretti alle sole pratiche dell'operatore che ha fatto login: stessa
 // resa grafica, scopo diverso (vista personale invece che vista d'ufficio).
+//
+// A differenza del monitor a parete (righeMax=11, pensato per uno schermo
+// fisso in ufficio), qui NON limitiamo le righe: l'operatore deve poter
+// scorrere con la rotella del mouse tutto il proprio elenco (anche centinaia
+// di pratiche), quindi passiamo a MonitorBoard il numero vero di righe
+// invece di un tetto fisso.
 import { richiediUtente } from "@/lib/auth/richiediUtente";
 import MonitorBoard, { type AlertRigaMonitor, type OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, livelloMonitor, coloreOperatore, formattaScadenza } from "@/lib/monitor/mappature";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo } from "@/lib/monitor/mappature";
 
 export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
@@ -15,16 +21,17 @@ function oggiIso() {
 export default async function DashboardOperatorePage() {
   const { supabase, user } = await richiediUtente();
   const adesso = new Date().toISOString();
+  const adessoMs = Date.now();
   const oggi = oggiIso();
 
-  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }] = await Promise.all([
+  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
     supabase.from("utenti").select("nome, cognome, colore_badge").eq("id", user.id).maybeSingle(),
     supabase
       .from("pratica_fasi")
       .select(`
-        id, stato, data_prevista,
+        id, stato, data_prevista, fase_id,
         fasi_workflow(codice, nome),
-        pratiche!inner(id, codice_commissione, priorita, stato_generale, operatore_assegnato_id,
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id,
           clienti(nome_completo)
         )
       `)
@@ -32,20 +39,28 @@ export default async function DashboardOperatorePage() {
       .lt("data_prevista", adesso)
       .eq("pratiche.operatore_assegnato_id", user.id)
       .order("data_prevista", { ascending: true })
-      .limit(200),
+      .limit(500),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).not("stato_generale", "in", '("chiusa","annullata")'),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
+    supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
   ]);
 
-  const righe = (faseRitardo ?? []).filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale));
+  const regolePerFase = costruisciMappaRegole(regoleAttive);
+
+  const righeConLivello = (faseRitardo ?? [])
+    .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale))
+    .map((r: any) => {
+      const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
+      return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };
+    });
 
   const opColore = coloreOperatore(user.id, profilo?.colore_badge);
   const opNome = profilo ? `${profilo.nome} ${profilo.cognome}` : "Operatore";
 
   const RANGO_LIVELLO = { critica: 0, alta: 1, media: 2, bassa: 3 } as const;
-  const righeOrdinate = [...righe].sort((a: any, b: any) => {
-    const rangoA = RANGO_LIVELLO[livelloMonitor(a.pratiche.priorita)];
-    const rangoB = RANGO_LIVELLO[livelloMonitor(b.pratiche.priorita)];
+  const righeOrdinate = [...righeConLivello].sort((a: any, b: any) => {
+    const rangoA = RANGO_LIVELLO[a.livello as keyof typeof RANGO_LIVELLO];
+    const rangoB = RANGO_LIVELLO[b.livello as keyof typeof RANGO_LIVELLO];
     if (rangoA !== rangoB) return rangoA - rangoB;
     return a.data_prevista.localeCompare(b.data_prevista);
   });
@@ -56,7 +71,7 @@ export default async function DashboardOperatorePage() {
     const { data, ora } = formattaScadenza(r.data_prevista);
     return {
       id: r.id,
-      livello: livelloMonitor(p.priorita),
+      livello: r.livello,
       scadenzaData: data,
       scadenzaOra: ora,
       praticaCodice: p.codice_commissione,
@@ -78,8 +93,8 @@ export default async function DashboardOperatorePage() {
     urgenti: alertRows.filter((r) => r.livello === "critica").length,
   }];
 
-  const scaduti = righe.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
-  const inScadenzaOggi = righe.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
+  const scaduti = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
+  const inScadenzaOggi = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
   return (
     <div className="h-screen overflow-hidden p-3">
@@ -97,7 +112,7 @@ export default async function DashboardOperatorePage() {
         }}
         messaggioVuoto="Nessuna pratica in ritardo al momento: sei in linea con tutte le scadenze."
         mostraSelettoreSchermoIntero={false}
-        righeMax={11}
+        righeMax={Math.max(alertRows.length, 1)}
       />
     </div>
   );
