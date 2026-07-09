@@ -6,7 +6,7 @@
 // utente o service role, indifferentemente) così la logica di calcolo resta
 // un'unica fonte di verità.
 import type { AlertRigaMonitor, OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo } from "@/lib/monitor/mappature";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce } from "@/lib/monitor/mappature";
 
 function oggiIso() {
   return new Date().toISOString().slice(0, 10);
@@ -76,6 +76,23 @@ export async function caricaDatiDirezione(supabase: any) {
   // Usata solo per le righe mostrate nella tabella del monitor.
   const righeConLivelloTabella = conLivello(faseRitardoTabella);
 
+  // Percentuale di merce arrivata in deposito, solo per le pratiche che
+  // compaiono in tabella con la fase "arrivo_merce" ancora aperta: serve
+  // per mostrare "Merce parzialmente pronta in deposito (NN%)" invece del
+  // generico "in ritardo" quando ha gia' superato la soglia (vedi
+  // etichettaArrivoMerce in mappature.ts).
+  const idPraticheArrivoMerce = righeConLivelloTabella
+    .filter((r: any) => r.fasi_workflow?.codice === "arrivo_merce")
+    .map((r: any) => r.pratiche.id);
+  const mappaPercentualeMerce = new Map<string, number>();
+  if (idPraticheArrivoMerce.length > 0) {
+    const { data: percentuali } = await supabase
+      .from("v_percentuale_merce_arrivata")
+      .select("pratica_id, percentuale_arrivata")
+      .in("pratica_id", idPraticheArrivoMerce);
+    for (const p of percentuali ?? []) mappaPercentualeMerce.set(p.pratica_id, p.percentuale_arrivata);
+  }
+
   const oggi = oggiIso();
   const RANGO_LIVELLO = { critica: 0, alta: 1, media: 2, bassa: 3 } as const;
   const righeOrdinate = [...righeConLivelloTabella].sort((a: any, b: any) => {
@@ -90,6 +107,7 @@ export async function caricaDatiDirezione(supabase: any) {
     const { data, ora } = formattaScadenza(r.data_prevista);
     const opNome = p.utenti ? `${p.utenti.nome} ${p.utenti.cognome}` : "Non assegnato";
     const opColore = p.utenti ? coloreOperatore(p.utenti.id, p.utenti.colore_badge) : "#6b7280";
+    const etichettaParziale = fw?.codice === "arrivo_merce" ? etichettaArrivoMerce(mappaPercentualeMerce.get(p.id)) : null;
     return {
       id: r.id,
       livello: r.livello,
@@ -99,7 +117,7 @@ export async function caricaDatiDirezione(supabase: any) {
       cliente: p.clienti?.nome_completo ?? "—",
       faseNome: fw?.nome ?? "Fase",
       faseIcona: ICONA_PER_FASE[fw?.codice] ?? "warn-sm",
-      descrizione: `${fw?.nome ?? "Fase"} in ritardo`,
+      descrizione: etichettaParziale ?? `${fw?.nome ?? "Fase"} in ritardo`,
       operatoreNome: opNome,
       operatoreColore: opColore,
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
