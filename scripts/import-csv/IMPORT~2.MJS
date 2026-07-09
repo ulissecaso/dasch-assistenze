@@ -58,15 +58,11 @@ async function main() {
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
     .select("id, codice")
-    .in("codice", ["ordine_ricambi", "arrivo_merce", "consegna_materiale"]);
+    .in("codice", ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "arrivo_merce", "consegna_materiale"]);
   if (erroreFasi) throw erroreFasi;
-  const fasiIds = {
-    ordine_ricambi: fasiWorkflow.find((f) => f.codice === "ordine_ricambi")?.id,
-    arrivo_merce: fasiWorkflow.find((f) => f.codice === "arrivo_merce")?.id,
-    consegna_materiale: fasiWorkflow.find((f) => f.codice === "consegna_materiale")?.id,
-  };
-  if (!fasiIds.ordine_ricambi || !fasiIds.arrivo_merce || !fasiIds.consegna_materiale) {
-    throw new Error("Fasi 'ordine_ricambi', 'arrivo_merce' e/o 'consegna_materiale' non trovate in fasi_workflow");
+  const fasiIds = Object.fromEntries(fasiWorkflow.map((f) => [f.codice, f.id]));
+  for (const codice of ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "arrivo_merce", "consegna_materiale"]) {
+    if (!fasiIds[codice]) throw new Error(`Fase '${codice}' non trovata in fasi_workflow`);
   }
 
   console.log(`Lettura file: ${percorsoFile}`);
@@ -136,6 +132,22 @@ async function main() {
         if (error) throw error;
         praticaId = nuovaPratica.id;
         nuove++;
+
+        // Pratica nata da Vamart (Piano di Carico), non da segnalazione
+        // mail: "Ricezione segnalazione", "Apertura pratica" e
+        // "Creazione commissione" sono gia' vere per definizione. La fase
+        // attiva diventa "Presa in carico".
+        await supabase
+          .from("pratica_fasi")
+          .update({ stato: "completata", data_effettiva: new Date().toISOString(), note: "Completata automaticamente: pratica proveniente da Vamart, non da segnalazione mail." })
+          .eq("pratica_id", praticaId)
+          .in("fase_id", [fasiIds.ricezione, fasiIds.apertura_pratica, fasiIds.creazione_commissione]);
+
+        await supabase
+          .from("pratica_fasi")
+          .update({ stato: "in_corso" })
+          .eq("pratica_id", praticaId)
+          .eq("fase_id", fasiIds.presa_in_carico);
       } else {
         praticaId = praticaEsistente.id;
         if (praticaEsistente.stato_generale !== pratica.stato_generale) {
@@ -315,6 +327,14 @@ async function sincronizzaFasiDaRighe(supabase, praticaId, righe, fasiIds) {
       if (faseSuccessiva && faseSuccessiva.stato === "da_iniziare") {
         await supabase.from("pratica_fasi").update({ stato: "in_corso" }).eq("id", faseSuccessiva.id);
       }
+    } else {
+      // Era l'ultimo passaggio (consegna_materiale): la pratica e' di
+      // fatto conclusa, non deve piu' comparire tra quelle aperte/in ritardo.
+      await supabase
+        .from("pratiche")
+        .update({ stato_generale: "chiusa", data_chiusura_effettiva: new Date().toISOString() })
+        .eq("id", praticaId)
+        .not("stato_generale", "in", "(chiusa,annullata)");
     }
   }
 }
