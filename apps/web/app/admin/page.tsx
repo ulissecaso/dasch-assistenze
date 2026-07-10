@@ -128,11 +128,12 @@ export default async function AdminPage({
       <section className="bg-white rounded-xl shadow p-4">
         <h2 className="text-lg font-medium mb-3">Regole di assegnazione</h2>
         <table className="w-full text-sm mb-4">
-          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
+          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Tipo</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
           <tbody>
             {(regoleAssegnazione ?? []).map((r: any) => (
               <tr key={r.id} className="border-t">
                 <td className="py-1">{r.nome}</td>
+                <td className="capitalize">{r.tipo_pratica ?? "assistenza"}</td>
                 <td>{r.criterio}</td>
                 <td>{r.valore_da} - {r.valore_a}</td>
                 <td>{r.utenti?.nome} {r.utenti?.cognome}</td>
@@ -156,7 +157,7 @@ export default async function AdminPage({
               </tr>
             ))}
             {(regoleAssegnazione ?? []).length === 0 && (
-              <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
+              <tr><td colSpan={8} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
             )}
           </tbody>
         </table>
@@ -167,6 +168,13 @@ export default async function AdminPage({
             <label className="md:col-span-2">
               <span className="block text-xs text-gray-500">Nome regola</span>
               <input name="nome" required placeholder="Cognomi A-G" className="w-full border rounded px-2 py-1" />
+            </label>
+            <label>
+              <span className="block text-xs text-gray-500">Tipo</span>
+              <select name="tipo_pratica" required defaultValue="assistenza" className="w-full border rounded px-2 py-1">
+                <option value="assistenza">Assistenza</option>
+                <option value="consegna">Consegna</option>
+              </select>
             </label>
             <label>
               <span className="block text-xs text-gray-500">Da lettera</span>
