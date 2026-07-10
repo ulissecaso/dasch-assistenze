@@ -3,6 +3,9 @@
 //
 // Uso:
 //   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node importVamartCsv.mjs "/percorso/Piano di carico.csv"
+//   (opzionale) ORIGINE_IMPORT=scraper_automatico ... per etichettare correttamente
+//   la sessione in importazioni_csv quando invocato dallo scraper automatico
+//   invece che a mano da terminale (default: "manuale").
 //
 // IMPORTANTE: il Piano di Carico esportato da Vamart contiene TUTTE le
 // commissioni (vendite normali comprese), non solo quelle di assistenza.
@@ -13,7 +16,20 @@
 // di Carico non corrisponde a nessuna pratica esistente, viene ignorata:
 // significa che quella commissione non e' di assistenza.
 //
-// Comportamento:
+// PERFORMANCE (versione 2, riallineata a apps/web/lib/import/eseguiImportazione.ts):
+// la prima versione di questo script faceva fino a 4 query al database PER
+// RIGA, in sequenza -- con un Piano di Carico di ~2000+ pratiche distinte
+// (migliaia di righe) questo richiedeva 15-20+ minuti anche su GitHub
+// Actions (dove non c'e' il limite di 60s di Vercel, ma comunque troppo per
+// un'automazione pensata per girare ogni ora). Questa versione, come
+// l'importatore usato dal pannello admin:
+//  - pre-carica in blocco (query .in(), a chunk, IN PARALLELO con Promise.all)
+//    tutto cio' che serve per confrontare il CSV con lo stato attuale
+//  - confronta in memoria e processa piu' pratiche in parallelo (worker pool,
+//    vedi eseguiConConcorrenza) invece che una alla volta
+//  - scrive righe nuove/aggiornamenti/storico in blocco, sempre in parallelo
+//
+// Comportamento (invariato rispetto alla versione precedente):
 //  - riconosce pratiche esistenti tramite codice_commissione (chiave naturale del gestionale)
 //  - ignora le righe la cui commissione non corrisponde a nessuna pratica di assistenza esistente
 //  - per ogni riga: crea la riga se nuova, aggiorna solo i campi cambiati (via riga_hash) e
@@ -45,8 +61,8 @@ import { raggruppaInPratiche } from "./mapToDomain.mjs";
 
 // Se l'ambiente di esecuzione richiede un proxy HTTP/HTTPS (es. reti aziendali
 // o ambienti sandbox), lo configuriamo qui per il fetch globale di Node.
-// In produzione (Vercel, server senza proxy) queste variabili non sono
-// impostate e questo blocco non ha alcun effetto.
+// In produzione (Vercel, server senza proxy, GitHub Actions) queste variabili
+// non sono impostate e questo blocco non ha alcun effetto.
 const PROXY_URL = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
 if (PROXY_URL) {
   const { ProxyAgent, setGlobalDispatcher } = await import("undici");
@@ -56,6 +72,51 @@ if (PROXY_URL) {
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const ORIGINE_IMPORT = process.env.ORIGINE_IMPORT || "manuale";
+
+const FASI_NECESSARIE = [
+  "ricezione",
+  "presa_in_carico",
+  "apertura_pratica",
+  "creazione_commissione",
+  "ordine_ricambi",
+  "conferma_ordine",
+  "arrivo_merce",
+  "consegna_materiale",
+];
+
+const STATI_ORDINATO_O_OLTRE = new Set(["Ordinato", "In giacenza", "Parzialmente consegnato", "Consegnato"]);
+const STATI_ARRIVATO_O_OLTRE = new Set(["In giacenza", "Parzialmente consegnato", "Consegnato"]);
+
+// Le query con .in(...) hanno un limite pratico di lunghezza (URL/parametri):
+// spezziamo le liste lunghe in blocchi di questa dimensione, lanciati poi
+// tutti insieme (Promise.all), non uno alla volta.
+const DIMENSIONE_BLOCCO = 300;
+
+// Quante pratiche processare in parallelo nella FASE 2 (confronto CSV vs
+// database + scritture puntuali per fase). Compromesso prudente tra
+// velocita' e numero di connessioni simultanee al database.
+const CONCORRENZA_PRATICHE = 20;
+
+function inBlocchi(lista, dimensione = DIMENSIONE_BLOCCO) {
+  const blocchi = [];
+  for (let i = 0; i < lista.length; i += dimensione) blocchi.push(lista.slice(i, i + dimensione));
+  return blocchi;
+}
+
+/** Esegue `fn` su ogni elemento di `elementi`, con al massimo `concorrenza`
+ *  chiamate in volo contemporaneamente. */
+async function eseguiConConcorrenza(elementi, concorrenza, fn) {
+  let prossimo = 0;
+  async function operaio() {
+    while (prossimo < elementi.length) {
+      const i = prossimo++;
+      await fn(elementi[i], i);
+    }
+  }
+  const numeroOperai = Math.max(1, Math.min(concorrenza, elementi.length));
+  await Promise.all(Array.from({ length: numeroOperai }, operaio));
+}
 
 async function main() {
   const percorsoFile = process.argv[2];
@@ -78,25 +139,24 @@ async function main() {
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
     .select("id, codice")
-    .in("codice", ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "conferma_ordine", "arrivo_merce", "consegna_materiale"]);
+    .in("codice", FASI_NECESSARIE);
   if (erroreFasi) throw erroreFasi;
   const fasiIds = Object.fromEntries(fasiWorkflow.map((f) => [f.codice, f.id]));
-  for (const codice of ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi", "conferma_ordine", "arrivo_merce", "consegna_materiale"]) {
+  for (const codice of FASI_NECESSARIE) {
     if (!fasiIds[codice]) throw new Error(`Fase '${codice}' non trovata in fasi_workflow (hai gia' applicato la migrazione 0009_conferma_ordine.sql?)`);
   }
+  const tutteLeFasiRilevanti = Object.values(fasiIds);
 
   console.log(`Lettura file: ${percorsoFile}`);
   const { righe, errori: erroriParsing } = parseFileCompleto(percorsoFile);
   const pratiche = raggruppaInPratiche(righe);
-
   console.log(`Righe totali valide: ${righe.length}, pratiche distinte: ${pratiche.length}, errori parsing: ${erroriParsing.length}`);
 
-  // 1. registra sessione di importazione
   const { data: importazione, error: erroreImport } = await supabase
     .from("importazioni_csv")
     .insert({
       nome_file: percorsoFile.split("/").pop(),
-      origine: "manuale",
+      origine: ORIGINE_IMPORT,
       righe_totali: righe.length,
       stato: "in_corso",
     })
@@ -104,34 +164,102 @@ async function main() {
     .single();
   if (erroreImport) throw erroreImport;
 
+  // ------------------------------------------------------------------
+  // FASE 1: pre-carico in blocco, IN PARALLELO, tutto cio' che serve per
+  // confrontare il CSV con lo stato attuale (elimina le query per-riga).
+  // ------------------------------------------------------------------
+  console.log("Fase 1/3: pre-carico pratiche/righe/fornitori/fasi esistenti...");
+
+  const codiciCommissione = [...new Set(pratiche.map((p) => p.codice_commissione))];
+  const mappaPraticheEsistenti = new Map();
+  await Promise.all(
+    inBlocchi(codiciCommissione).map(async (blocco) => {
+      const { data, error } = await supabase.from("pratiche").select("*").in("codice_commissione", blocco);
+      if (error) throw error;
+      for (const p of data ?? []) mappaPraticheEsistenti.set(p.codice_commissione, p);
+    })
+  );
+  const idPraticheEsistenti = [...mappaPraticheEsistenti.values()].map((p) => p.id);
+
+  const mappaRigheEsistenti = new Map();
+  await Promise.all(
+    inBlocchi(idPraticheEsistenti).map(async (blocco) => {
+      const { data, error } = await supabase
+        .from("pratica_righe")
+        .select("id, pratica_id, codice_articolo, descrizione, riga_hash, status_riga")
+        .in("pratica_id", blocco);
+      if (error) throw error;
+      for (const r of data ?? []) mappaRigheEsistenti.set(`${r.pratica_id}|${r.codice_articolo}|${r.descrizione}`, r);
+    })
+  );
+
+  const nomiFornitori = [...new Set(righe.map((r) => r.fornitore).filter(Boolean))];
+  const mappaFornitori = new Map();
+  await Promise.all(
+    inBlocchi(nomiFornitori).map(async (blocco) => {
+      const { data, error } = await supabase.from("fornitori").select("id, ragione_sociale").in("ragione_sociale", blocco);
+      if (error) throw error;
+      for (const f of data ?? []) mappaFornitori.set(f.ragione_sociale, f.id);
+    })
+  );
+  const fornitoriMancanti = nomiFornitori.filter((n) => !mappaFornitori.has(n));
+  if (fornitoriMancanti.length > 0) {
+    await Promise.all(
+      inBlocchi(fornitoriMancanti, 500).map(async (blocco) => {
+        const { data, error } = await supabase
+          .from("fornitori")
+          .insert(blocco.map((ragione_sociale) => ({ ragione_sociale })))
+          .select("id, ragione_sociale");
+        if (error) throw error;
+        for (const f of data ?? []) mappaFornitori.set(f.ragione_sociale, f.id);
+      })
+    );
+  }
+
+  const mappaFasiPerPratica = new Map();
+  await Promise.all(
+    inBlocchi(idPraticheEsistenti).map(async (blocco) => {
+      const { data, error } = await supabase
+        .from("pratica_fasi")
+        .select("id, pratica_id, fase_id, stato")
+        .in("pratica_id", blocco)
+        .in("fase_id", tutteLeFasiRilevanti);
+      if (error) throw error;
+      for (const f of data ?? []) {
+        if (!mappaFasiPerPratica.has(f.pratica_id)) mappaFasiPerPratica.set(f.pratica_id, new Map());
+        mappaFasiPerPratica.get(f.pratica_id).set(f.fase_id, f);
+      }
+    })
+  );
+
+  // ------------------------------------------------------------------
+  // FASE 2: confronto in memoria + scritture puntuali, con piu' pratiche
+  // lavorate in parallelo (worker pool) invece che una alla volta.
+  // ------------------------------------------------------------------
+  console.log(`Fase 2/3: confronto ${pratiche.length} pratiche (concorrenza ${CONCORRENZA_PRATICHE})...`);
+
   let nuove = 0, aggiornate = 0, invariate = 0, ignorate = 0, righeErrore = 0;
+  const righeDaInserire = [];
+  const aggiornamentiRiga = [];
+  const storicoPraticheDaInserire = [];
+  const erroriPratiche = [];
 
-  for (const pratica of pratiche) {
+  await eseguiConConcorrenza(pratiche, CONCORRENZA_PRATICHE, async (pratica) => {
     try {
-      // upsert pratica (match per codice_commissione). Il Piano di Carico
-      // contiene TUTTE le commissioni Vamart, comprese le vendite normali:
-      // se non esiste gia' una pratica di assistenza con questo codice
-      // (creata dalla segnalazione mail o dall'import "Commissioni - Solo
-      // di assistenza", vedi importCommissioniAssistenza.mjs), questa riga
-      // non riguarda l'assistenza e va ignorata, non creata.
-      const { data: praticaEsistente } = await supabase
-        .from("pratiche")
-        .select("*")
-        .eq("codice_commissione", pratica.codice_commissione)
-        .maybeSingle();
+      const praticaEsistente = mappaPraticheEsistenti.get(pratica.codice_commissione);
 
+      // Il Piano di Carico contiene TUTTE le commissioni Vamart, comprese le
+      // vendite normali: se non esiste gia' una pratica di assistenza con
+      // questo codice, questa riga non riguarda l'assistenza e va ignorata.
       if (!praticaEsistente) {
         ignorate++;
-        continue;
+        return;
       }
 
       const praticaId = praticaEsistente.id;
       if (praticaEsistente.stato_generale !== pratica.stato_generale) {
-        await supabase
-          .from("pratiche")
-          .update({ stato_generale: pratica.stato_generale })
-          .eq("id", praticaId);
-        await supabase.from("storico_modifiche").insert({
+        await supabase.from("pratiche").update({ stato_generale: pratica.stato_generale }).eq("id", praticaId);
+        storicoPraticheDaInserire.push({
           entita: "pratica",
           entita_id: praticaId,
           campo: "stato_generale",
@@ -144,34 +272,10 @@ async function main() {
         invariate++;
       }
 
-      // upsert righe della pratica
       for (const riga of pratica.righe) {
-        let fornitoreId = null;
-        if (riga.fornitore) {
-          const { data: fornitoreEsistente } = await supabase
-            .from("fornitori")
-            .select("id")
-            .eq("ragione_sociale", riga.fornitore)
-            .maybeSingle();
-          fornitoreId = fornitoreEsistente?.id;
-          if (!fornitoreId) {
-            const { data: nuovoFornitore, error } = await supabase
-              .from("fornitori")
-              .insert({ ragione_sociale: riga.fornitore })
-              .select()
-              .single();
-            if (error) throw error;
-            fornitoreId = nuovoFornitore.id;
-          }
-        }
-
-        const { data: rigaEsistente } = await supabase
-          .from("pratica_righe")
-          .select("id, riga_hash, status_riga")
-          .eq("pratica_id", praticaId)
-          .eq("codice_articolo", riga.codice_articolo)
-          .eq("descrizione", riga.descrizione)
-          .maybeSingle();
+        const fornitoreId = riga.fornitore ? mappaFornitori.get(riga.fornitore) ?? null : null;
+        const chiave = `${praticaId}|${riga.codice_articolo}|${riga.descrizione}`;
+        const rigaEsistente = mappaRigheEsistenti.get(chiave);
 
         const payloadRiga = {
           pratica_id: praticaId,
@@ -197,63 +301,89 @@ async function main() {
         };
 
         if (!rigaEsistente) {
-          const { error } = await supabase.from("pratica_righe").insert(payloadRiga);
-          if (error) throw error;
+          righeDaInserire.push(payloadRiga);
         } else if (rigaEsistente.riga_hash !== riga.riga_hash) {
-          const { error } = await supabase
-            .from("pratica_righe")
-            .update(payloadRiga)
-            .eq("id", rigaEsistente.id);
-          if (error) throw error;
-          await supabase.from("storico_modifiche").insert({
-            entita: "pratica_riga",
-            entita_id: rigaEsistente.id,
-            campo: "status_riga",
-            valore_precedente: rigaEsistente.status_riga,
-            valore_nuovo: riga.status,
-            origine: "importazione_csv",
+          aggiornamentiRiga.push({
+            id: rigaEsistente.id,
+            payload: payloadRiga,
+            statoPrecedente: rigaEsistente.status_riga,
+            statoNuovo: riga.status,
           });
         }
       }
 
-      // Se dal Piano di Carico risulta gia' un ordine piazzato, le fasi a
-      // monte sono evidentemente gia' avvenute anche se nessuno le ha
-      // segnate su Dasch: le completiamo prima di sincronizzare il resto.
-      await completaFasiPregresse(supabase, praticaId, pratica.righe, fasiIds);
-      await sincronizzaFasiDaRighe(supabase, praticaId, pratica.righe, fasiIds);
+      const fasiDiQuestaPratica = mappaFasiPerPratica.get(praticaId) ?? new Map();
+      await completaFasiPregresse(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
+      await sincronizzaFasiDaRighe(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
     } catch (err) {
       righeErrore++;
-      await supabase.from("importazioni_csv_errori").insert({
-        importazione_id: importazione.id,
-        messaggio_errore: String(err.message || err),
-        dato_grezzo: pratica,
-      });
+      erroriPratiche.push({ messaggio: String(err.message || err), dato: pratica });
     }
-  }
+  });
 
-  // registra eventuali errori di parsing (righe scartate prima ancora del mapping)
-  for (const e of erroriParsing) {
-    await supabase.from("importazioni_csv_errori").insert({
+  // ------------------------------------------------------------------
+  // FASE 3: scritture in blocco, in parallelo (righe nuove, aggiornamenti,
+  // storico, errori) -- invece che una insert/update alla volta.
+  // ------------------------------------------------------------------
+  console.log(`Fase 3/3: scrittura ${righeDaInserire.length} righe nuove, ${aggiornamentiRiga.length} aggiornamenti...`);
+
+  await Promise.all(
+    inBlocchi(righeDaInserire, 500).map(async (blocco) => {
+      if (blocco.length === 0) return;
+      const { error } = await supabase.from("pratica_righe").insert(blocco);
+      if (error) throw error;
+    })
+  );
+
+  const storicoRigheDaInserire = [];
+  await eseguiConConcorrenza(aggiornamentiRiga, CONCORRENZA_PRATICHE, async (agg) => {
+    const { error } = await supabase.from("pratica_righe").update(agg.payload).eq("id", agg.id);
+    if (error) throw error;
+    storicoRigheDaInserire.push({
+      entita: "pratica_riga",
+      entita_id: agg.id,
+      campo: "status_riga",
+      valore_precedente: agg.statoPrecedente,
+      valore_nuovo: agg.statoNuovo,
+      origine: "importazione_csv",
+    });
+  });
+
+  await Promise.all(
+    inBlocchi([...storicoPraticheDaInserire, ...storicoRigheDaInserire], 500).map((blocco) =>
+      blocco.length > 0 ? supabase.from("storico_modifiche").insert(blocco) : Promise.resolve()
+    )
+  );
+
+  const erroriDaRegistrare = [
+    ...erroriPratiche.map((e) => ({ importazione_id: importazione.id, messaggio_errore: e.messaggio, dato_grezzo: e.dato })),
+    ...erroriParsing.map((e) => ({
       importazione_id: importazione.id,
       numero_riga: e.numero_riga,
       messaggio_errore: e.messaggio,
       dato_grezzo: e.dato_grezzo,
-    });
-  }
+    })),
+  ];
+  await Promise.all(
+    inBlocchi(erroriDaRegistrare, 500).map((blocco) =>
+      blocco.length > 0 ? supabase.from("importazioni_csv_errori").insert(blocco) : Promise.resolve()
+    )
+  );
 
+  const totaleErrori = righeErrore + erroriParsing.length;
   await supabase
     .from("importazioni_csv")
     .update({
-      righe_nuove: nuove,
+      righe_nuove: righeDaInserire.length,
       righe_aggiornate: aggiornate,
       righe_invariate: invariate,
-      righe_errore: righeErrore + erroriParsing.length,
-      stato: righeErrore + erroriParsing.length > 0 ? "completata_con_errori" : "completata",
+      righe_errore: totaleErrori,
+      stato: totaleErrori > 0 ? "completata_con_errori" : "completata",
       completata_il: new Date().toISOString(),
     })
     .eq("id", importazione.id);
 
-  console.log(`Import completata. Pratiche aggiornate: ${aggiornate}, invariate: ${invariate}, ignorate (non di assistenza): ${ignorate}, errori: ${righeErrore + erroriParsing.length}`);
+  console.log(`Import completata. Pratiche aggiornate: ${aggiornate}, invariate: ${invariate}, ignorate (non di assistenza): ${ignorate}, errori: ${totaleErrori}`);
 }
 
 // ---------------------------------------------------------------------
@@ -262,21 +392,19 @@ async function main() {
 // completiamo retroattivamente anche le fasi a monte (Ricezione
 // segnalazione / Presa in carico / Apertura pratica / Creazione
 // commissione) se non lo sono gia', anche se nessun operatore le ha mai
-// segnate completate a mano su Dasch. Evita falsi allarmi "presa in carico
-// in ritardo" su pratiche in realta' gia' avanzate da mesi.
+// segnate completate a mano su Dasch. Legge le fasi attuali dalla mappa
+// pre-caricata (fasiAttuali) invece di interrogare il database.
 // ---------------------------------------------------------------------
-async function completaFasiPregresse(supabase, praticaId, righe, fasiIds) {
+async function completaFasiPregresse(supabase, praticaId, righe, fasiIds, fasiAttuali) {
   const almenoUnaOrdinata = righe.some((r) => STATI_ORDINATO_O_OLTRE.has(r.status));
   if (!almenoUnaOrdinata) return;
 
-  const { data: fasiPregresse } = await supabase
-    .from("pratica_fasi")
-    .select("id")
-    .eq("pratica_id", praticaId)
-    .in("fase_id", [fasiIds.ricezione, fasiIds.presa_in_carico, fasiIds.apertura_pratica, fasiIds.creazione_commissione])
-    .neq("stato", "completata");
+  const idFasiDaCompletare = [fasiIds.ricezione, fasiIds.presa_in_carico, fasiIds.apertura_pratica, fasiIds.creazione_commissione]
+    .map((faseId) => fasiAttuali.get(faseId))
+    .filter((f) => f && f.stato !== "completata")
+    .map((f) => f.id);
 
-  if (!fasiPregresse || fasiPregresse.length === 0) return;
+  if (idFasiDaCompletare.length === 0) return;
 
   await supabase
     .from("pratica_fasi")
@@ -285,57 +413,34 @@ async function completaFasiPregresse(supabase, praticaId, righe, fasiIds) {
       data_effettiva: new Date().toISOString(),
       note: "Completata automaticamente: risulta gia' un ordine piazzato su Vamart (Piano di Carico), la fase e' evidentemente gia' avvenuta.",
     })
-    .in("id", fasiPregresse.map((f) => f.id));
+    .in("id", idFasiDaCompletare);
 }
 
 // ---------------------------------------------------------------------
 // Fa avanzare "Invio ordine ricambi" / "Arrivo merce in deposito" /
 // "Consegna materiale" in base allo stato aggregato delle righe della
 // pratica. Ogni fase si completa solo quando TUTTE le righe hanno
-// raggiunto (almeno) lo stato corrispondente -- se anche una sola riga e'
-// rimasta indietro, la fase resta aperta e il motore di alert la segnala
-// secondo le soglie configurate dal pannello admin.
-// Le condizioni sono indipendenti (non solo sequenziali): se un import
-// arriva con le righe gia' tutte "Consegnato" senza essere mai passate da
-// noi per gli step intermedi, completa comunque anche le fasi precedenti.
+// raggiunto (almeno) lo stato corrispondente.
 //
 // ECCEZIONE IMPORTANTE: "arrivo_merce" (e quindi anche "consegna_materiale"
 // a cascata) NON avanza mai finche' l'operatore non ha dichiarato a mano la
-// fase "conferma_ordine" sulla schermata pratica (pulsante "Dichiaro:
-// conferma ordine ricevuta"). E' un controllo umano voluto: anche se Vamart
-// segnala gia' merce in giacenza o consegnata, il sistema resta fermo su
-// "conferma ordine" finche' un operatore non conferma di aver verificato di
-// persona l'ordine. Se le righe risultano gia' tutte ordinate e la fase
-// "conferma_ordine" e' ancora da_iniziare, la attiviamo (in_corso) cosi'
-// compare tra le cose da fare dell'operatore.
+// fase "conferma_ordine" sulla schermata pratica. E' un controllo umano
+// voluto: anche se Vamart segnala gia' merce in giacenza o consegnata, il
+// sistema resta fermo su "conferma ordine" finche' un operatore non conferma
+// di aver verificato di persona l'ordine. Legge/scrive le fasi attuali sulla
+// mappa pre-caricata (perFase) invece che con query dedicate per pratica.
 // ---------------------------------------------------------------------
-const STATI_ORDINATO_O_OLTRE = new Set(["Ordinato", "In giacenza", "Parzialmente consegnato", "Consegnato"]);
-const STATI_ARRIVATO_O_OLTRE = new Set(["In giacenza", "Parzialmente consegnato", "Consegnato"]);
-
-async function sincronizzaFasiDaRighe(supabase, praticaId, righe, fasiIds) {
+async function sincronizzaFasiDaRighe(supabase, praticaId, righe, fasiIds, perFase) {
   if (!righe || righe.length === 0) return;
 
   const tutteOrdinate = righe.every((r) => STATI_ORDINATO_O_OLTRE.has(r.status));
   const tutteArrivate = righe.every((r) => STATI_ARRIVATO_O_OLTRE.has(r.status));
   const tutteConsegnate = righe.every((r) => r.status === "Consegnato");
 
-  const { data: fasiAttuali } = await supabase
-    .from("pratica_fasi")
-    .select("id, fase_id, stato")
-    .eq("pratica_id", praticaId)
-    .in("fase_id", [fasiIds.ordine_ricambi, fasiIds.conferma_ordine, fasiIds.arrivo_merce, fasiIds.consegna_materiale]);
-
-  const perFase = Object.fromEntries((fasiAttuali ?? []).map((f) => [f.fase_id, f]));
-
-  // Appena tutte le righe risultano ordinate, la fase "conferma_ordine"
-  // diventa attuale (da_iniziare -> in_corso), cosi' l'operatore la vede tra
-  // le cose da fare. Usiamo la condizione grezza (tutteOrdinate) e non lo
-  // stato gia' letto di "ordine_ricambi", perche' quest'ultimo potrebbe
-  // completarsi solo pochi istanti dopo, piu' sotto in questa stessa
-  // esecuzione (fasiAttuali e' stato letto prima di quell'update).
-  const faseConfermaOrdine = perFase[fasiIds.conferma_ordine];
+  const faseConfermaOrdine = perFase.get(fasiIds.conferma_ordine);
   if (tutteOrdinate && faseConfermaOrdine && faseConfermaOrdine.stato === "da_iniziare") {
     await supabase.from("pratica_fasi").update({ stato: "in_corso" }).eq("id", faseConfermaOrdine.id);
+    faseConfermaOrdine.stato = "in_corso";
   }
   const confermaOrdineFatta = faseConfermaOrdine?.stato === "completata";
 
@@ -354,19 +459,21 @@ async function sincronizzaFasiDaRighe(supabase, praticaId, righe, fasiIds) {
   ];
 
   for (const [indice, passaggio] of passaggi.entries()) {
-    const faseCorrente = perFase[passaggio.faseId];
+    const faseCorrente = perFase.get(passaggio.faseId);
     if (!faseCorrente || faseCorrente.stato === "completata" || !passaggio.condizione) continue;
 
     await supabase
       .from("pratica_fasi")
       .update({ stato: "completata", data_effettiva: new Date().toISOString(), note: passaggio.nota })
       .eq("id", faseCorrente.id);
+    faseCorrente.stato = "completata";
 
     const prossimoPassaggio = passaggi[indice + 1];
     if (prossimoPassaggio) {
-      const faseSuccessiva = perFase[prossimoPassaggio.faseId];
+      const faseSuccessiva = perFase.get(prossimoPassaggio.faseId);
       if (faseSuccessiva && faseSuccessiva.stato === "da_iniziare") {
         await supabase.from("pratica_fasi").update({ stato: "in_corso" }).eq("id", faseSuccessiva.id);
+        faseSuccessiva.stato = "in_corso";
       }
     } else {
       // Era l'ultimo passaggio (consegna_materiale): la pratica e' di
@@ -382,5 +489,5 @@ async function sincronizzaFasiDaRighe(supabase, praticaId, righe, fasiIds) {
 
 main().catch((err) => {
   console.error("Errore fatale durante l'importazione:", err);
-  process.exit(1);
+  process.exitCode = 1;
 });
