@@ -62,13 +62,19 @@ export async function dichiaraConfermaOrdine(formData: FormData) {
   if (error) throw error;
   if (!faseAggiornata) throw new Error("Fase 'conferma ordine' non trovata per questa pratica");
 
+  // origine deve rispettare il vincolo della tabella (solo 'utente',
+  // 'importazione_csv', 'importazione_api', 'automazione'): il "chi" va
+  // invece nel campo modificato_da (id) e nel testo di valore_nuovo, non
+  // in un valore custom per origine (violerebbe il check e l'insert
+  // fallirebbe silenziosamente, come succedeva prima di questa correzione).
   await supabase.from("storico_modifiche").insert({
     entita: "pratica_fasi",
     entita_id: praticaFaseId,
     campo: "stato",
     valore_precedente: "in_corso",
-    valore_nuovo: "completata",
-    origine: `operatore:${nomeOperatore}`,
+    valore_nuovo: `completata (dichiarato da ${nomeOperatore})`,
+    origine: "utente",
+    modificato_da: user.id,
   });
 
   revalidatePath(`/pratiche/${praticaId}`);
@@ -114,8 +120,9 @@ export async function annullaConfermaOrdine(formData: FormData) {
     entita_id: praticaFaseId,
     campo: "stato",
     valore_precedente: "completata",
-    valore_nuovo: "in_corso",
-    origine: `operatore:${nomeOperatore}`,
+    valore_nuovo: `in_corso (annullato da ${nomeOperatore})`,
+    origine: "utente",
+    modificato_da: user.id,
   });
 
   revalidatePath(`/pratiche/${praticaId}`);
