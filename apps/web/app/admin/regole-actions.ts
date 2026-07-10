@@ -11,9 +11,13 @@ export async function creaRegolaAssegnazione(formData: FormData) {
   const valoreA = String(formData.get("valore_a") ?? "").trim().toUpperCase();
   const operatoreId = String(formData.get("operatore_id") ?? "");
   const priorita = Number(formData.get("priorita") ?? 100);
+  const tipoPratica = String(formData.get("tipo_pratica") ?? "assistenza");
 
   if (!nome || !valoreDa || !valoreA || !operatoreId) {
     throw new Error("Tutti i campi sono obbligatori");
+  }
+  if (!["assistenza", "consegna"].includes(tipoPratica)) {
+    throw new Error("Tipo pratica non valido");
   }
 
   const supabase = creaSupabaseClientAdmin();
@@ -24,6 +28,7 @@ export async function creaRegolaAssegnazione(formData: FormData) {
     valore_a: valoreA,
     operatore_id: operatoreId,
     priorita,
+    tipo_pratica: tipoPratica,
     attiva: true,
   });
   if (error) throw error;
