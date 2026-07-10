@@ -68,6 +68,35 @@ export default async function DashboardOperatorePage() {
     for (const p of percentuali ?? []) mappaPercentualeMerce.set(p.pratica_id, p.percentuale_arrivata);
   }
 
+  // Avviso "merce parzialmente arrivata" (>=80%, <100%) per le pratiche di
+  // CONSEGNA dell'operatore: stessa logica usata nel Monitor Consegne
+  // (lib/monitor/caricaDatiConsegne.ts), qui ristretta alle sole pratiche
+  // assegnate a questo operatore. Non e' una vera fase in ritardo (la fase
+  // "pianificazione_consegna" resta "da_iniziare" finche' non arriva il
+  // 100%), quindi va costruita a parte incrociando la stessa vista.
+  const { data: praticheConsegnaOperatore } = await supabase
+    .from("pratiche")
+    .select("id, codice_commissione, data_consegna_prevista, clienti(nome_completo)")
+    .eq("tipo", "consegna")
+    .eq("operatore_assegnato_id", user.id)
+    .not("stato_generale", "in", '("chiusa","annullata")');
+
+  const idGiaInCorsoConsegna = new Set(
+    righeConLivello.filter((r: any) => r.fasi_workflow?.codice === "pianificazione_consegna").map((r: any) => r.pratiche.id)
+  );
+  const idDaControllareConsegna = (praticheConsegnaOperatore ?? [])
+    .filter((p: any) => !idGiaInCorsoConsegna.has(p.id))
+    .map((p: any) => p.id);
+
+  const mappaPercentualeConsegna = new Map<string, number>();
+  if (idDaControllareConsegna.length > 0) {
+    const { data: percentualiConsegna } = await supabase
+      .from("v_percentuale_merce_arrivata")
+      .select("pratica_id, percentuale_arrivata")
+      .in("pratica_id", idDaControllareConsegna);
+    for (const p of percentualiConsegna ?? []) mappaPercentualeConsegna.set(p.pratica_id, p.percentuale_arrivata);
+  }
+
   const opColore = coloreOperatore(user.id, profilo?.colore_badge);
   const opNome = profilo ? `${profilo.nome} ${profilo.cognome}` : "Operatore";
 
@@ -79,7 +108,7 @@ export default async function DashboardOperatorePage() {
     return a.data_prevista.localeCompare(b.data_prevista);
   });
 
-  const alertRows: AlertRigaMonitor[] = righeOrdinate.map((r: any) => {
+  const alertRowsFasi: AlertRigaMonitor[] = righeOrdinate.map((r: any) => {
     const p = r.pratiche;
     const fw = r.fasi_workflow;
     const { data, ora } = formattaScadenza(r.data_prevista);
@@ -100,6 +129,33 @@ export default async function DashboardOperatorePage() {
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
     };
   });
+
+  const alertRowsParzialiConsegna: AlertRigaMonitor[] = (praticheConsegnaOperatore ?? [])
+    .filter((p: any) => {
+      const perc = mappaPercentualeConsegna.get(p.id);
+      return perc != null && perc >= 80 && perc < 100;
+    })
+    .map((p: any) => {
+      const perc = mappaPercentualeConsegna.get(p.id)!;
+      const { data, ora } = p.data_consegna_prevista ? formattaScadenza(p.data_consegna_prevista) : { data: "-", ora: "-" };
+      return {
+        id: `parziale-${p.id}`,
+        livello: "media" as const,
+        scadenzaData: data,
+        scadenzaOra: ora,
+        praticaId: p.id,
+        praticaCodice: p.codice_commissione,
+        cliente: p.clienti?.nome_completo ?? "—",
+        faseNome: "Merce in arrivo",
+        faseIcona: "box",
+        descrizione: `Merce parzialmente pronta in deposito (${perc}%)`,
+        operatoreNome: opNome,
+        operatoreColore: opColore,
+        azione: "Valutare consegna parziale o sollecitare il fornitore",
+      };
+    });
+
+  const alertRows: AlertRigaMonitor[] = [...alertRowsFasi, ...alertRowsParzialiConsegna];
 
   const operatori: OperatoreCardMonitor[] = [{
     id: user.id,
