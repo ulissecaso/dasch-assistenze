@@ -59,9 +59,28 @@ export default async function AdminPage({
   if (filtroPratiche) {
     // Cerca sia nel codice commissione sia nel nome cliente: copre sia il
     // caso "conosco il numero pratica" sia "conosco solo il cliente".
-    queryPratiche = queryPratiche.or(
-      `codice_commissione.ilike.%${filtroPratiche}%,clienti.nome_completo.ilike.%${filtroPratiche}%`
-    );
+    //
+    // NOTA: non si puo' costruire un .or() con un riferimento diretto a una
+    // tabella embedded (es. "clienti.nome_completo") in una stringa unica:
+    // PostgREST puo' fallire nel fare il parsing ("failed to parse logic
+    // tree"), specialmente con codici commissione che contengono "/" (es.
+    // "1053/25", formato standard di Vamart). Per evitarlo, cerchiamo prima
+    // i clienti il cui nome corrisponde, poi filtriamo pratiche per
+    // codice_commissione OPPURE cliente_id in quell'elenco: sono entrambe
+    // colonne della tabella "pratiche" stessa, nessun riferimento embedded.
+    const { data: clientiTrovati } = await supabase
+      .from("clienti")
+      .select("id")
+      .ilike("nome_completo", `%${filtroPratiche}%`);
+    const idClientiTrovati = (clientiTrovati ?? []).map((c: any) => c.id);
+
+    if (idClientiTrovati.length > 0) {
+      queryPratiche = queryPratiche.or(
+        `codice_commissione.ilike.%${filtroPratiche}%,cliente_id.in.(${idClientiTrovati.join(",")})`
+      );
+    } else {
+      queryPratiche = queryPratiche.ilike("codice_commissione", `%${filtroPratiche}%`);
+    }
   }
 
   const [
