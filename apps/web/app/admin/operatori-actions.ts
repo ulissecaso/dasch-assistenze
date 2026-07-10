@@ -4,6 +4,7 @@
 
 import { revalidatePath } from "next/cache";
 import { creaSupabaseClientAdmin } from "@/lib/supabase/server";
+import { richiediAdmin } from "@/lib/auth/richiediUtente";
 import { emailSinteticaDaCodice } from "@/lib/auth/codiceOperatore";
 
 const ALFABETO_CODICE = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // esclusi 0/O/1/I per leggibilita
@@ -110,6 +111,53 @@ export async function alternaAttivoUtente(formData: FormData) {
   const supabase = creaSupabaseClientAdmin();
   const { error } = await supabase.from("utenti").update({ attivo: nuovoStato }).eq("id", id);
   if (error) throw error;
+
+  revalidatePath("/admin");
+}
+
+/** Cambia la password di un admin/responsabile (accesso con email). Azione
+ *  sensibile: richiediAdmin() e' ripetuta qui (a differenza delle altre
+ *  Server Action di questo file) perche' un cambio password e' equivalente
+ *  a un potenziale furto di account, quindi vale la pena la difesa in piu'. */
+export async function cambiaPasswordAdmin(formData: FormData) {
+  await richiediAdmin();
+
+  const id = String(formData.get("id") ?? "");
+  const password = String(formData.get("password") ?? "").trim();
+  if (!id) throw new Error("id mancante");
+  if (password.length < 6) throw new Error("La password deve avere almeno 6 caratteri");
+
+  const supabase = creaSupabaseClientAdmin();
+  const { error } = await supabase.auth.admin.updateUserById(id, { password });
+  if (error) throw error;
+
+  revalidatePath("/admin");
+}
+
+/** Rigenera il codice di accesso di un operatore (equivale a "cambia
+ *  password": per gli operatori il codice E' la password, vedi creaOperatore
+ *  sopra). Il vecchio codice smette immediatamente di funzionare; il nuovo
+ *  va comunicato all'operatore (visibile dopo con "mostra codice"). */
+export async function rigeneraCodiceOperatore(formData: FormData) {
+  await richiediAdmin();
+
+  const id = String(formData.get("id") ?? "");
+  if (!id) throw new Error("id mancante");
+
+  const supabase = creaSupabaseClientAdmin();
+
+  let codice = generaCodice();
+  for (let tentativo = 0; tentativo < 5; tentativo++) {
+    const { data: esistente } = await supabase.from("utenti").select("id").eq("codice_accesso", codice).maybeSingle();
+    if (!esistente) break;
+    codice = generaCodice();
+  }
+
+  const { error: erroreAuth } = await supabase.auth.admin.updateUserById(id, { password: codice });
+  if (erroreAuth) throw erroreAuth;
+
+  const { error: erroreUtente } = await supabase.from("utenti").update({ codice_accesso: codice }).eq("id", id);
+  if (erroreUtente) throw erroreUtente;
 
   revalidatePath("/admin");
 }
