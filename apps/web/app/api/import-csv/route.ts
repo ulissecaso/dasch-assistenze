@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
       pratiche_aggiornate: risultato.praticheAggiornate,
       pratiche_invariate: risultato.praticheInvariate,
       pratiche_ignorate: risultato.praticheIgnorate,
+      nuove_consegne: risultato.nuoveConsegne,
       righe_nuove: risultato.nuoveRighe,
       errori: risultato.righeErrore + risultato.erroriParsing,
       stato: risultato.stato,
