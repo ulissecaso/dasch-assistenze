@@ -2,7 +2,7 @@
 // Schermata di dettaglio pratica: timeline fasi, righe/articoli, allegati, note, storico.
 import { notFound } from "next/navigation";
 import { richiediUtente } from "@/lib/auth/richiediUtente";
-import { dichiaraConfermaOrdine } from "./pratica-actions";
+import { dichiaraConfermaOrdine, annullaConfermaOrdine } from "./pratica-actions";
 
 export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
@@ -28,6 +28,15 @@ export default async function PraticaDettaglioPage({ params }: { params: { id: s
     supabase.from("v_percentuale_merce_arrivata").select("percentuale_arrivata, quantita_totale, quantita_arrivata").eq("pratica_id", params.id).maybeSingle(),
   ]);
 
+  // Il pulsante "Dichiaro conferma ordine" deve comparire solo dopo che
+  // l'ordine ricambi risulta davvero inviato: non ha senso confermare un
+  // ordine che non e' stato ancora fatto. Stessa regola e' applicata anche
+  // lato server in dichiaraConfermaOrdine (pratica-actions.ts), qui serve
+  // solo per decidere cosa mostrare nella pagina.
+  const ordineRicambiCompletato = (fasi ?? []).some(
+    (f: any) => f.fasi_workflow?.codice === "ordine_ricambi" && f.stato === "completata"
+  );
+
   return (
     <main className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
       <section className="lg:col-span-2 space-y-6">
@@ -51,17 +60,35 @@ export default async function PraticaDettaglioPage({ params }: { params: { id: s
                 </p>
                 {f.note && <p className="text-sm mt-1 italic">{f.note}</p>}
                 {f.fasi_workflow?.codice === "conferma_ordine" && f.stato !== "completata" && (
-                  <form action={dichiaraConfermaOrdine} className="mt-2">
+                  ordineRicambiCompletato ? (
+                    <form action={dichiaraConfermaOrdine} className="mt-2">
+                      <input type="hidden" name="pratica_fase_id" value={f.id} />
+                      <input type="hidden" name="pratica_id" value={pratica.id} />
+                      <p className="text-xs text-amber-700 mb-1">
+                        Da fare solo dopo aver verificato di persona che l&#39;ordine è confermato: finché non lo dichiari, l&#39;arrivo merce resta bloccato anche se Vamart lo segnala già.
+                      </p>
+                      <button
+                        type="submit"
+                        className="rounded-md bg-amber-600 text-white text-sm font-medium px-3 py-1.5 hover:bg-amber-700"
+                      >
+                        Dichiaro: conferma ordine ricevuta
+                      </button>
+                    </form>
+                  ) : (
+                    <p className="text-xs text-gray-400 italic mt-1">
+                      Disponibile solo dopo l&#39;invio dell&#39;ordine ricambi.
+                    </p>
+                  )
+                )}
+                {f.fasi_workflow?.codice === "conferma_ordine" && f.stato === "completata" && (
+                  <form action={annullaConfermaOrdine} className="mt-1">
                     <input type="hidden" name="pratica_fase_id" value={f.id} />
                     <input type="hidden" name="pratica_id" value={pratica.id} />
-                    <p className="text-xs text-amber-700 mb-1">
-                      Da fare solo dopo aver verificato di persona che l&#39;ordine è confermato: finché non lo dichiari, l&#39;arrivo merce resta bloccato anche se Vamart lo segnala già.
-                    </p>
                     <button
                       type="submit"
-                      className="rounded-md bg-amber-600 text-white text-sm font-medium px-3 py-1.5 hover:bg-amber-700"
+                      className="text-xs text-gray-500 underline hover:text-gray-700"
                     >
-                      Dichiaro: conferma ordine ricevuta
+                      Annulla dichiarazione (click per errore)
                     </button>
                   </form>
                 )}
