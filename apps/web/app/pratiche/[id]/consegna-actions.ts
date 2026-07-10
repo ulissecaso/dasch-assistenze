@@ -58,7 +58,7 @@ async function dichiaraFaseConsegna(codiceFase: CodiceFaseConsegna, formData: Fo
 
   revalidatePath(`/pratiche/${praticaId}`);
   revalidatePath("/dashboard-operatore");
-  revalidatePath("/dashboard-direzione");
+  revalidatePath("/dashboard-direzione-consegne");
   revalidatePath("/monitor/consegne");
 }
 
@@ -100,7 +100,7 @@ async function annullaFaseConsegna(codiceFase: CodiceFaseConsegna, formData: For
 
   revalidatePath(`/pratiche/${praticaId}`);
   revalidatePath("/dashboard-operatore");
-  revalidatePath("/dashboard-direzione");
+  revalidatePath("/dashboard-direzione-consegne");
   revalidatePath("/monitor/consegne");
 }
 
