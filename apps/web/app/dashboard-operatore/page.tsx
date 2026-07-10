@@ -89,6 +89,7 @@ export default async function DashboardOperatorePage() {
       livello: r.livello,
       scadenzaData: data,
       scadenzaOra: ora,
+      praticaId: p.id,
       praticaCodice: p.codice_commissione,
       cliente: p.clienti?.nome_completo ?? "—",
       faseNome: fw?.nome ?? "Fase",
