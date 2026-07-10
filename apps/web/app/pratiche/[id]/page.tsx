@@ -3,6 +3,7 @@
 import { notFound } from "next/navigation";
 import { richiediUtente } from "@/lib/auth/richiediUtente";
 import { dichiaraConfermaOrdine, annullaConfermaOrdine } from "./pratica-actions";
+import { dichiaraPianificazioneConsegna, annullaPianificazioneConsegna, dichiaraPagamento, annullaPagamento } from "./consegna-actions";
 
 export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
@@ -88,6 +89,60 @@ export default async function PraticaDettaglioPage({ params }: { params: { id: s
                       type="submit"
                       className="text-xs text-gray-500 underline hover:text-gray-700"
                     >
+                      Annulla dichiarazione (click per errore)
+                    </button>
+                  </form>
+                )}
+
+                {/* Consegne: "Programma consegna" e "Pagamento ricevuto" sono
+                    dichiarazioni manuali indipendenti (nessuna in blocca
+                    l'altra), verificate dall'operatore di persona su Vamart
+                    (Planning / Statistiche commissioni). */}
+                {f.fasi_workflow?.codice === "pianificazione_consegna" && f.stato === "in_corso" && (
+                  <form action={dichiaraPianificazioneConsegna} className="mt-2">
+                    <input type="hidden" name="pratica_fase_id" value={f.id} />
+                    <input type="hidden" name="pratica_id" value={pratica.id} />
+                    <p className="text-xs text-amber-700 mb-1">
+                      Da fare solo dopo aver fissato davvero la consegna nel Planning su Vamart.
+                    </p>
+                    <button type="submit" className="rounded-md bg-amber-600 text-white text-sm font-medium px-3 py-1.5 hover:bg-amber-700">
+                      Dichiaro: consegna fissata al planning
+                    </button>
+                  </form>
+                )}
+                {f.fasi_workflow?.codice === "pianificazione_consegna" && f.stato === "da_iniziare" && (
+                  <p className="text-xs text-gray-400 italic mt-1">In attesa che la merce risulti tutta arrivata in deposito.</p>
+                )}
+                {f.fasi_workflow?.codice === "pianificazione_consegna" && f.stato === "completata" && (
+                  <form action={annullaPianificazioneConsegna} className="mt-1">
+                    <input type="hidden" name="pratica_fase_id" value={f.id} />
+                    <input type="hidden" name="pratica_id" value={pratica.id} />
+                    <button type="submit" className="text-xs text-gray-500 underline hover:text-gray-700">
+                      Annulla dichiarazione (click per errore)
+                    </button>
+                  </form>
+                )}
+
+                {f.fasi_workflow?.codice === "pagamento" && f.stato === "in_corso" && (
+                  <form action={dichiaraPagamento} className="mt-2">
+                    <input type="hidden" name="pratica_fase_id" value={f.id} />
+                    <input type="hidden" name="pratica_id" value={pratica.id} />
+                    <p className="text-xs text-amber-700 mb-1">
+                      Da fare solo dopo aver verificato di persona su Vamart (Statistiche commissioni) che il pagamento è arrivato.
+                    </p>
+                    <button type="submit" className="rounded-md bg-amber-600 text-white text-sm font-medium px-3 py-1.5 hover:bg-amber-700">
+                      Dichiaro: pagamento ricevuto
+                    </button>
+                  </form>
+                )}
+                {f.fasi_workflow?.codice === "pagamento" && f.stato === "da_iniziare" && (
+                  <p className="text-xs text-gray-400 italic mt-1">In attesa che la merce risulti tutta arrivata in deposito.</p>
+                )}
+                {f.fasi_workflow?.codice === "pagamento" && f.stato === "completata" && (
+                  <form action={annullaPagamento} className="mt-1">
+                    <input type="hidden" name="pratica_fase_id" value={f.id} />
+                    <input type="hidden" name="pratica_id" value={pratica.id} />
+                    <button type="submit" className="text-xs text-gray-500 underline hover:text-gray-700">
                       Annulla dichiarazione (click per errore)
                     </button>
                   </form>
