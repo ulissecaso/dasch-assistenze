@@ -29,6 +29,21 @@ export async function dichiaraConfermaOrdine(formData: FormData) {
   const { user } = await richiediUtente();
   const supabase = creaSupabaseClientAdmin();
 
+  // Difesa in profondita': non permettere di dichiarare la conferma ordine
+  // se l'ordine ricambi non risulta ancora completato. La pagina gia'
+  // nasconde il pulsante in questo caso, ma il controllo va ripetuto qui
+  // perche' le Server Action sono endpoint invocabili anche fuori dal
+  // render della pagina.
+  const { data: faseOrdineRicambi } = await supabase
+    .from("pratica_fasi")
+    .select("stato, fasi_workflow!inner(codice)")
+    .eq("pratica_id", praticaId)
+    .eq("fasi_workflow.codice", "ordine_ricambi")
+    .maybeSingle();
+  if (!faseOrdineRicambi || faseOrdineRicambi.stato !== "completata") {
+    throw new Error("Non puoi dichiarare la conferma ordine prima che l'invio ordine ricambi risulti completato.");
+  }
+
   const { data: profilo } = await supabase.from("utenti").select("nome, cognome").eq("id", user.id).maybeSingle();
   const nomeOperatore = profilo ? `${profilo.nome} ${profilo.cognome}` : "operatore";
 
@@ -53,6 +68,53 @@ export async function dichiaraConfermaOrdine(formData: FormData) {
     campo: "stato",
     valore_precedente: "in_corso",
     valore_nuovo: "completata",
+    origine: `operatore:${nomeOperatore}`,
+  });
+
+  revalidatePath(`/pratiche/${praticaId}`);
+  revalidatePath("/dashboard-operatore");
+  revalidatePath("/monitor/direzione");
+}
+
+/** Annulla una dichiarazione di "conferma ordine" fatta per errore: riporta
+ *  la fase a "in_corso" (non a "da_iniziare", perche' l'importatore CSV
+ *  l'aveva gia' attivata automaticamente quando tutte le righe risultavano
+ *  ordinate - vedi importVamartCsv.mjs) cosi' l'operatore puo' dichiararla
+ *  di nuovo quando avra' davvero verificato la conferma. Il trigger
+ *  trg_pratica_fasi_avvia_cronometro fa ripartire automaticamente il
+ *  cronometro (data_prevista) quando lo stato torna a "in_corso". */
+export async function annullaConfermaOrdine(formData: FormData) {
+  const praticaFaseId = String(formData.get("pratica_fase_id") ?? "");
+  const praticaId = String(formData.get("pratica_id") ?? "");
+  if (!praticaFaseId || !praticaId) throw new Error("Dati mancanti: pratica_fase_id o pratica_id");
+
+  const { user } = await richiediUtente();
+  const supabase = creaSupabaseClientAdmin();
+
+  const { data: profilo } = await supabase.from("utenti").select("nome, cognome").eq("id", user.id).maybeSingle();
+  const nomeOperatore = profilo ? `${profilo.nome} ${profilo.cognome}` : "operatore";
+
+  const { data: faseAggiornata, error } = await supabase
+    .from("pratica_fasi")
+    .update({
+      stato: "in_corso",
+      data_effettiva: null,
+      note: `Dichiarazione annullata da ${nomeOperatore} il ${new Date().toLocaleString("it-IT")}: probabile click per errore, in attesa di una nuova conferma.`,
+    })
+    .eq("id", praticaFaseId)
+    .eq("pratica_id", praticaId)
+    .eq("stato", "completata") // si puo' annullare solo una dichiarazione gia' fatta
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  if (!faseAggiornata) throw new Error("Fase 'conferma ordine' non trovata (o non era completata) per questa pratica");
+
+  await supabase.from("storico_modifiche").insert({
+    entita: "pratica_fasi",
+    entita_id: praticaFaseId,
+    campo: "stato",
+    valore_precedente: "completata",
+    valore_nuovo: "in_corso",
     origine: `operatore:${nomeOperatore}`,
   });
 
