@@ -43,7 +43,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <nav className="w-56 bg-white border-r p-4 space-y-2 flex flex-col">
             <p className="font-semibold mb-4">Dasch Assistenze</p>
             {isAdmin && (
-              <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-direzione">Dashboard Direzione</Link>
+              <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-direzione">Monitoraggio Assistenze</Link>
+            )}
+            {isAdmin && (
+              <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-direzione-consegne">Monitoraggio Consegne</Link>
             )}
             <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-operatore">Le mie pratiche</Link>
             {isAdmin && (
