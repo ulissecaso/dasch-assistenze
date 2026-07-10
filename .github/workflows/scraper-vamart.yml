@@ -1,8 +1,22 @@
 name: scraper-vamart
 
-# Scarica automaticamente da Vamart il CSV delle sole "commissioni di
-# assistenza" (usando l'export/filtro gia' presente nel portale) e lo importa
-# in Supabase, sostituendo il download/import manuale 1-2 volte al giorno.
+# Scarica automaticamente da Vamart due file, nella stessa sessione:
+#  1. Il CSV delle sole "commissioni di assistenza" (filtro dedicato del
+#     portale) -> rileva le pratiche aperte direttamente su Vamart e
+#     chiude la fase "Creazione commissione di assistenza" quando trova
+#     una pratica gia' in attesa da una segnalazione via mail.
+#  2. Il CSV "Piano di Carico" (nessun filtro) -> fa avanzare le fasi
+#     "Invio ordine ricambi", "Arrivo merce in deposito" (dopo conferma
+#     ordine dell'operatore) e "Consegna materiale" in base allo stato di
+#     ogni riga/articolo.
+# Sostituisce il download/import manuale dal pannello admin.
+#
+# Frequenza: ogni ora durante l'orario lavorativo (8:00-18:00, Lun-Sab).
+# Due blocchi di orario UTC per compensare il cambio ora legale/solare
+# (l'Italia passa da CET a CEST e viceversa, GitHub Actions gira sempre in
+# UTC e non si adegua da solo): non e' preciso al minuto sul cambio
+# effettivo di marzo/ottobre, ma resta all'interno dell'orario lavorativo
+# tutto l'anno.
 #
 # Richiede questi Repository secrets (Settings > Secrets and variables > Actions):
 #   VAMART_URL                  URL della pagina di login di Vamart
@@ -13,14 +27,16 @@ name: scraper-vamart
 
 on:
   schedule:
-    - cron: "0 7 * * 1-6"   # 08:00 Europe/Rome (UTC+1) da lunedi' a sabato
-    - cron: "0 13 * * 1-6"  # 14:00 Europe/Rome
+    # Apr-Ott (ora legale, CEST = UTC+2): 06-16 UTC = 08:00-18:00 locali
+    - cron: "0 6-16 * 4-10 1-6"
+    # Nov-Mar (ora solare, CET = UTC+1): 07-17 UTC = 08:00-18:00 locali
+    - cron: "0 7-17 * 1-3,11-12 1-6"
   workflow_dispatch: {}      # permette anche l'avvio manuale da GitHub
 
 jobs:
   scrape-e-importa:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +52,7 @@ jobs:
         working-directory: scraper
         run: npx playwright install --with-deps chromium
 
-      - name: Scarica CSV commissioni di assistenza da Vamart
+      - name: Scarica CSV commissioni di assistenza + Piano di Carico da Vamart
         working-directory: scraper
         env:
           GESTIONALE_URL: ${{ secrets.VAMART_URL }}
@@ -48,22 +64,31 @@ jobs:
         working-directory: scripts/import-csv
         run: npm install
 
-      - name: Importa il CSV in Supabase
+      - name: Importa commissioni di assistenza in Supabase
         working-directory: scripts/import-csv
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node importCommissioniAssistenza.mjs ../../scraper/downloads/ultimo.csv
 
-      - name: Carica il CSV scaricato come artifact (debug)
+      - name: Importa Piano di Carico in Supabase (avanzamento fasi ordine/giacenza/consegna)
+        working-directory: scripts/import-csv
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node importVamartCsv.mjs ../../scraper/downloads/ultimo-piano-di-carico.csv
+
+      - name: Carica i CSV scaricati come artifact (debug)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ultimo-csv-vamart
-          path: scraper/downloads/ultimo.csv
+          name: ultimi-csv-vamart
+          path: |
+            scraper/downloads/ultimo.csv
+            scraper/downloads/ultimo-piano-di-carico.csv
           retention-days: 14
 
       - name: Notifica fallimento
         if: failure()
         run: |
-          echo "::error::Scraping/import Vamart fallito. Controllare il log del gestionale (cambio password, layout portale, 2FA) e importare manualmente nel frattempo."
+          echo "::error::Scraping/import Vamart fallito. Controllare il log (cambio password, layout portale, 2FA) e importare manualmente dal pannello admin nel frattempo."
