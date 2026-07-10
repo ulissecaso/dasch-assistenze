@@ -6,6 +6,7 @@ import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
 import { alternaAnnullataPratica } from "./pratiche-actions";
+import UploadCsvForm from "@/components/admin/UploadCsvForm";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
 
 export const dynamic = "force-dynamic";
@@ -258,8 +259,13 @@ export default async function AdminPage({
       </section>
 
       <section className="bg-white rounded-xl shadow p-4">
-        <h2 className="text-lg font-medium mb-3">Importazioni CSV</h2>
-        <table className="w-full text-sm">
+        <h2 className="text-lg font-medium mb-1">Importazioni CSV</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Scarica il &quot;Piano di Carico&quot; da Vamart e caricalo qui: puoi farlo quante volte vuoi durante la giornata,
+          non solo una volta — più spesso lo fai, più aggiornata resta la dashboard per gli operatori.
+        </p>
+        <UploadCsvForm />
+        <table className="w-full text-sm mt-4">
           <thead><tr className="text-left text-gray-500"><th>File</th><th>Stato</th><th>Nuove</th><th>Aggiornate</th><th>Errori</th><th>Data</th></tr></thead>
           <tbody>
             {(importazioni ?? []).map((i: any) => (
@@ -274,7 +280,6 @@ export default async function AdminPage({
             ))}
           </tbody>
         </table>
-        {/* Upload manuale: componente client che fa POST a /api/import-csv */}
       </section>
 
       <section className="bg-white rounded-xl shadow p-4">
