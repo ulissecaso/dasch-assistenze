@@ -2,13 +2,20 @@
 // Endpoint per l'importazione manuale (upload da admin panel) o automatica
 // (invocato dallo scraper/pipeline dopo il download del CSV dal gestionale).
 //
-// Riusa la stessa logica di scripts/import-csv (mapping identico), così da
-// avere un'unica fonte di verità sul parsing indipendentemente dal trigger
-// (upload manuale, cron, scraper).
+// Riusa la stessa logica di scripts/import-csv (mapping identico) tramite
+// lib/import/eseguiImportazione.ts, così da avere un'unica fonte di verità
+// sul parsing e sulla scrittura, indipendentemente dal trigger (upload
+// manuale, cron, scraper).
 import { NextRequest, NextResponse } from "next/server";
 import { creaSupabaseClientAdmin } from "@/lib/supabase/server";
+import { richiediAdmin } from "@/lib/auth/richiediUtente";
+import { eseguiImportazioneCsv } from "@/lib/import/eseguiImportazione";
 
 export async function POST(req: NextRequest) {
+  // Solo admin/responsabile possono avviare un'importazione da qui (stessa
+  // regola della pagina /admin che ospita il form di upload).
+  await richiediAdmin();
+
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
   if (!file) {
@@ -18,31 +25,25 @@ export async function POST(req: NextRequest) {
   const testoCsv = await file.text();
   const supabase = creaSupabaseClientAdmin();
 
-  // La logica di parsing/mapping è la stessa di scripts/import-csv/parseCsv.mjs
-  // e mapToDomain.mjs — in produzione, estrarle in un package condiviso
-  // (es. packages/import-logic) usato sia dallo script CLI sia da questa route.
-  const { parseFileCompletoDaTesto } = await import("@/lib/import/parseCsvTesto");
-  const { raggruppaInPratiche } = await import("@/lib/import/mapToDomain");
+  try {
+    const risultato = await eseguiImportazioneCsv(supabase, testoCsv, {
+      nomeFile: file.name,
+      origine: "manuale",
+    });
 
-  const { righe, errori } = parseFileCompletoDaTesto(testoCsv);
-  const pratiche = raggruppaInPratiche(righe);
-
-  const { data: importazione } = await supabase
-    .from("importazioni_csv")
-    .insert({ nome_file: file.name, origine: "manuale", righe_totali: righe.length, stato: "in_corso" })
-    .select()
-    .single();
-
-  // NB: per import di grandi dimensioni via HTTP, valutare l'esecuzione
-  // in background (Supabase Edge Function / job queue) per non superare i
-  // timeout della funzione serverless. Qui è mostrata la logica sincrona
-  // di base equivalente allo script CLI (vedi scripts/import-csv).
-
-  return NextResponse.json({
-    importazione_id: importazione?.id,
-    righe_totali: righe.length,
-    pratiche_rilevate: pratiche.length,
-    errori_parsing: errori.length,
-    messaggio: "Import avviata. Consultare /admin per lo stato di avanzamento.",
-  });
+    return NextResponse.json({
+      importazione_id: risultato.importazioneId,
+      righe_totali: risultato.righeTotali,
+      pratiche_rilevate: risultato.praticheRilevate,
+      pratiche_aggiornate: risultato.praticheAggiornate,
+      pratiche_invariate: risultato.praticheInvariate,
+      pratiche_ignorate: risultato.praticheIgnorate,
+      righe_nuove: risultato.nuoveRighe,
+      errori: risultato.righeErrore + risultato.erroriParsing,
+      stato: risultato.stato,
+      messaggio: "Importazione completata.",
+    });
+  } catch (err: any) {
+    return NextResponse.json({ errore: String(err?.message || err) }, { status: 500 });
+  }
 }
