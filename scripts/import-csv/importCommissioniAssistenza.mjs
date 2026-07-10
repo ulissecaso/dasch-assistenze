@@ -19,8 +19,7 @@
 //  2) Il venditore crea direttamente una commissione di assistenza su Vamart,
 //     senza che sia mai arrivata una mail dal cliente. In questo caso non
 //     esiste nessuna pratica "in attesa" da collegare: ne creiamo una nuova
-//     "grezza" (come faceva gia' la versione precedente di questo script),
-//     cosi' l'operatore la vede e deve comunque prenderla in carico.
+//     "grezza", cosi' l'operatore la vede e deve comunque prenderla in carico.
 //
 // Se per lo stesso cliente risultano PIU' pratiche in attesa nella stessa
 // finestra di date (caso ambiguo), non indoviniamo: la riga viene segnalata
@@ -106,12 +105,13 @@ async function main() {
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
     .select("id, codice")
-    .in("codice", ["creazione_commissione", "ordine_ricambi"]);
+    .in("codice", ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi"]);
   if (erroreFasi) throw erroreFasi;
-  const faseCreazioneCommissioneId = fasiWorkflow.find((f) => f.codice === "creazione_commissione")?.id;
-  const faseOrdineRicambiId = fasiWorkflow.find((f) => f.codice === "ordine_ricambi")?.id;
-  if (!faseCreazioneCommissioneId || !faseOrdineRicambiId) {
-    throw new Error("Fasi 'creazione_commissione' e/o 'ordine_ricambi' non trovate in fasi_workflow");
+  const fasiIds = Object.fromEntries(fasiWorkflow.map((f) => [f.codice, f.id]));
+  const faseCreazioneCommissioneId = fasiIds.creazione_commissione;
+  const faseOrdineRicambiId = fasiIds.ordine_ricambi;
+  if (!faseCreazioneCommissioneId || !faseOrdineRicambiId || !fasiIds.ricezione || !fasiIds.presa_in_carico || !fasiIds.apertura_pratica) {
+    throw new Error("Fasi richieste non trovate in fasi_workflow");
   }
 
   console.log(`Lettura file: ${percorsoFile}`);
@@ -122,6 +122,7 @@ async function main() {
     .from("importazioni_csv")
     .insert({
       nome_file: percorsoFile.split("/").pop(),
+      // Valore valido per importazioni_csv.origine ('manuale' | 'scraper_automatico' | 'api').
       origine: "scraper_automatico",
       righe_totali: righe.length,
       stato: "in_corso",
@@ -174,13 +175,15 @@ async function main() {
           .neq("pratica_fasi.stato", "completata");
 
         candidati = (pratichePendenti ?? []).filter((p) => {
-          if (!dataRegistrazione || !p.data_apertura) return true;
+          if (!dataRegistrazione || !p.data_apertura) return true; // nessuna data per filtrare: teniamo come possibile candidato
           const giorni = Math.abs((new Date(dataRegistrazione) - new Date(p.data_apertura)) / 86400000);
           return giorni <= FINESTRA_GIORNI_MATCH;
         });
       }
 
       if (candidati.length === 1) {
+        // Collegamento trovato: chiudiamo la fase "creazione_commissione" e
+        // facciamo avanzare il puntatore alla fase successiva.
         const pratica = candidati[0];
         const faseCreazione = pratica.pratica_fasi[0];
 
@@ -189,38 +192,28 @@ async function main() {
           .update({
             stato: "completata",
             data_effettiva: new Date().toISOString(),
-            note: `Commissione di assistenza creata su Vamart: ${codiceCommissione} (rilevata dal controllo automatico giornaliero).`,
+            note: `Commissione di assistenza creata su Vamart: ${codiceCommissione} (rilevata dallo scraper automatico).`,
           })
           .eq("id", faseCreazione.id);
 
-      const { error: erroreAggiornamentoCodice } = await supabase
-        .from("pratiche")
-        .update({ codice_commissione: codiceCommissione })
-        .eq("id", pratica.id);
-      if (erroreAggiornamentoCodice) throw erroreAggiornamentoCodice;
+        await supabase
+          .from("pratica_fasi")
+          .update({ stato: "in_corso" })
+          .eq("pratica_id", pratica.id)
+          .eq("fase_id", faseOrdineRicambiId)
+          .eq("stato", "da_iniziare");
 
-      await supabase.from("storico_modifiche").insert({
-        entita: "pratiche",
-        entita_id: pratica.id,
-        campo: "codice_commissione",
-        valore_nuovo: codiceCommissione,
-        origine: "scraper_automatico",
-      });
-
-      await supabase
-        .from("pratica_fasi")
-        .update({ stato: "in_corso" })
-        .eq("pratica_id", pratica.id)
-        .eq("fase_id", faseOrdineRicambiId)
-        .eq("stato", "da_iniziare");
-
+        // origine deve essere uno tra 'utente' | 'importazione_csv' |
+        // 'importazione_api' | 'automazione' (vincolo su storico_modifiche):
+        // uno scraper e' un'automazione, non e' l'utente ne' un'importazione
+        // CSV "manuale/Piano di Carico" in senso stretto.
         await supabase.from("storico_modifiche").insert({
           entita: "pratiche",
           entita_id: pratica.id,
           campo: "creazione_commissione",
           valore_precedente: null,
           valore_nuovo: codiceCommissione,
-          origine: "scraper_automatico",
+          origine: "automazione",
         });
 
         ricollegate++;
@@ -233,6 +226,9 @@ async function main() {
         );
       }
 
+      // Nessuna pratica in attesa trovata: commissione di assistenza aperta
+      // direttamente dal venditore su Vamart, senza segnalazione via mail.
+      // Creiamo una pratica "grezza" da far prendere in carico all'operatore.
       const { data: clienteEsistente } = await supabase
         .from("clienti")
         .select("id")
@@ -255,19 +251,40 @@ async function main() {
       if (riga.venditore) dettagliParti.push(`Venditore: ${riga.venditore}.`);
       if (riga.importo) dettagliParti.push(`Importo: ${riga.importo}.`);
 
-      const { error: erroreInserimento } = await supabase.from("pratiche").insert({
-        codice_commissione: codiceCommissione,
-        codice_commissione_riferimento: codiceCommissione,
-        cliente_id: clienteId,
-        tipo: "assistenza",
-        canale_origine: "manuale",
-        fonte_dati: "csv",
-        stato_generale: "aperta",
-        data_apertura: dataRegistrazione || new Date().toISOString(),
-        data_consegna_prevista: parseDataItaliana(riga.dataConsegna),
-        descrizione: dettagliParti.join(" "),
-      });
+      const { data: nuovaPratica, error: erroreInserimento } = await supabase
+        .from("pratiche")
+        .insert({
+          codice_commissione: codiceCommissione,
+          codice_commissione_riferimento: codiceCommissione,
+          cliente_id: clienteId,
+          tipo: "assistenza",
+          canale_origine: "manuale",
+          fonte_dati: "csv",
+          stato_generale: "aperta",
+          data_apertura: dataRegistrazione || new Date().toISOString(),
+          data_consegna_prevista: parseDataItaliana(riga.dataConsegna),
+          descrizione: dettagliParti.join(" "),
+        })
+        .select()
+        .single();
       if (erroreInserimento) throw erroreInserimento;
+
+      // Pratica nata direttamente da Vamart, non da segnalazione mail:
+      // "Ricezione segnalazione", "Apertura pratica" e "Creazione
+      // commissione" sono gia' vere per definizione (la pratica esiste
+      // perche' e' gia' su Vamart). La fase attiva diventa "Presa in
+      // carico", che richiede davvero un intervento dell'operatore.
+      await supabase
+        .from("pratica_fasi")
+        .update({ stato: "completata", data_effettiva: new Date().toISOString(), note: "Completata automaticamente: pratica proveniente da Vamart, non da segnalazione mail." })
+        .eq("pratica_id", nuovaPratica.id)
+        .in("fase_id", [fasiIds.ricezione, fasiIds.apertura_pratica, faseCreazioneCommissioneId]);
+
+      await supabase
+        .from("pratica_fasi")
+        .update({ stato: "in_corso" })
+        .eq("pratica_id", nuovaPratica.id)
+        .eq("fase_id", fasiIds.presa_in_carico);
 
       nuove++;
     } catch (err) {
