@@ -43,6 +43,9 @@ export default async function MonitorDirezionePubblico({
         alertRows={alertRows}
         stats={stats}
         righeMax={11}
+        // Schermo pubblico senza login: nessun link verso il resto del
+        // portale (vedi commento in cima a questo file).
+        righeCliccabili={false}
       />
     </div>
   );
