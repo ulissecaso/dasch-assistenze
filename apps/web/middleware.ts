@@ -10,7 +10,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-const ROTTE_SOLO_ADMIN = ["/admin", "/dashboard-direzione"];
+const ROTTE_SOLO_ADMIN = ["/admin", "/dashboard-direzione", "/dashboard-direzione-consegne"];
 const ROTTE_AUTENTICATE = ["/dashboard-operatore", "/pratiche"];
 
 // Propaga il pathname come header interno: serve al layout radice per
