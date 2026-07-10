@@ -1,21 +1,22 @@
 // lib/import/eseguiImportazione.ts
 // Logica di scrittura condivisa dell'importazione "Piano di Carico" Vamart.
 //
-// STORIA: la prima versione di questo file rifaceva, riga per riga, fino a
-// 4 domande al database (fornitore, riga esistente, insert/update, storico).
-// Su un file con migliaia di righe questo significava migliaia di
-// andirivieni col database in un'unica richiesta HTTP: su Vercel la
-// funzione superava il tempo massimo consentito e l'importazione falliva a
-// meta' (timeout "An error occurred..."), senza nessuna riga salvata.
+// STORIA (2 tentativi prima di questa versione):
+//  1. La prima versione rifaceva, riga per riga, fino a 4 domande al
+//     database. Su un file con migliaia di righe = migliaia di andirivieni
+//     in un'unica richiesta HTTP: timeout su Vercel, nessuna riga salvata.
+//  2. La seconda versione ha eliminato le query per-riga caricando in
+//     anticipo tutto cio' che serve con query "in blocco" (batch) — ma le
+//     eseguiva comunque UNA ALLA VOLTA, in sequenza (un blocco alla volta,
+//     una pratica alla volta): con un Piano di Carico che contiene TUTTE le
+//     commissioni Vamart (non solo assistenza, quindi potenzialmente
+//     migliaia di codici), la sola somma dei tempi di rete di tante
+//     richieste sequenziali bastava di nuovo a superare il timeout.
 //
-// Questa versione carica in anticipo, con poche query "in blocco" (batch),
-// tutto cio' che serve per confrontare il CSV con lo stato attuale del
-// database (pratiche esistenti, righe esistenti, fornitori esistenti, fasi
-// attuali), e poi lavora in memoria: le uniche scritture rimaste sono gli
-// insert/update davvero necessari, e i nuovi inserimenti vengono fatti in
-// blocco invece che uno alla volta. Stessa identica logica/risultato di
-// prima (e dello script CLI scripts/import-csv/importVamartCsv.mjs), solo
-// molto piu' veloce su file grandi.
+// Questa versione esegue le query in blocco IN PARALLELO (Promise.all)
+// invece che in sequenza, e processa le pratiche con piu' operai
+// concorrenti invece che una alla volta (vedi eseguiConConcorrenza): il
+// tempo totale diventa quello del blocco piu' lento, non la somma di tutti.
 import { parseFileCompletoDaTesto } from "./parseCsvTesto";
 import { raggruppaInPratiche } from "./mapToDomain";
 
@@ -34,14 +35,36 @@ const STATI_ORDINATO_O_OLTRE = new Set(["Ordinato", "In giacenza", "Parzialmente
 const STATI_ARRIVATO_O_OLTRE = new Set(["In giacenza", "Parzialmente consegnato", "Consegnato"]);
 
 // Le query con .in(...) hanno un limite pratico di lunghezza (URL/parametri):
-// spezziamo le liste lunghe in blocchi di questa dimensione, cosi' funziona
-// anche con migliaia di codici/id senza avvicinarsi a quel limite.
+// spezziamo le liste lunghe in blocchi di questa dimensione. I blocchi
+// vengono poi lanciati tutti insieme (Promise.all), non uno alla volta.
 const DIMENSIONE_BLOCCO = 300;
+
+// Quante pratiche processare in parallelo nella FASE 2 (confronto CSV vs
+// database + scritture puntuali per fase). Un numero troppo alto rischia di
+// saturare le connessioni al database; questo valore e' un compromesso
+// prudente tra velocita' e stabilita'.
+const CONCORRENZA_PRATICHE = 20;
 
 function inBlocchi<T>(lista: T[], dimensione = DIMENSIONE_BLOCCO): T[][] {
   const blocchi: T[][] = [];
   for (let i = 0; i < lista.length; i += dimensione) blocchi.push(lista.slice(i, i + dimensione));
   return blocchi;
+}
+
+/** Esegue `fn` su ogni elemento di `elementi`, con al massimo `concorrenza`
+ *  chiamate in volo contemporaneamente (invece di farle tutte insieme, che
+ *  rischierebbe di saturare le connessioni al database, o una alla volta,
+ *  che sarebbe troppo lento). */
+async function eseguiConConcorrenza<T>(elementi: T[], concorrenza: number, fn: (el: T, indice: number) => Promise<void>) {
+  let prossimo = 0;
+  async function operaio() {
+    while (prossimo < elementi.length) {
+      const i = prossimo++;
+      await fn(elementi[i], i);
+    }
+  }
+  const numeroOperai = Math.max(1, Math.min(concorrenza, elementi.length));
+  await Promise.all(Array.from({ length: numeroOperai }, operaio));
 }
 
 export type RisultatoImportazione = {
@@ -99,70 +122,82 @@ export async function eseguiImportazioneCsv(
   if (erroreImport) throw erroreImport;
 
   // ------------------------------------------------------------------
-  // FASE 1: pre-carico in blocco tutto cio' che serve per confrontare il
-  // CSV con lo stato attuale, invece di interrogare il database una volta
-  // per ogni riga (era questo il vero collo di bottiglia).
+  // FASE 1: pre-carico in blocco, IN PARALLELO, tutto cio' che serve per
+  // confrontare il CSV con lo stato attuale.
   // ------------------------------------------------------------------
 
   // 1a. Pratiche esistenti (match per codice_commissione).
   const codiciCommissione = [...new Set(pratiche.map((p: any) => p.codice_commissione))];
   const mappaPraticheEsistenti = new Map<string, any>();
-  for (const blocco of inBlocchi(codiciCommissione)) {
-    const { data, error } = await supabase.from("pratiche").select("*").in("codice_commissione", blocco);
-    if (error) throw error;
-    for (const p of data ?? []) mappaPraticheEsistenti.set(p.codice_commissione, p);
-  }
+  await Promise.all(
+    inBlocchi(codiciCommissione).map(async (blocco) => {
+      const { data, error } = await supabase.from("pratiche").select("*").in("codice_commissione", blocco);
+      if (error) throw error;
+      for (const p of data ?? []) mappaPraticheEsistenti.set(p.codice_commissione, p);
+    })
+  );
   const idPraticheEsistenti = [...mappaPraticheEsistenti.values()].map((p) => p.id);
 
   // 1b. Righe gia' presenti per quelle pratiche (chiave: pratica+articolo+descrizione).
   const mappaRigheEsistenti = new Map<string, any>();
-  for (const blocco of inBlocchi(idPraticheEsistenti)) {
-    const { data, error } = await supabase
-      .from("pratica_righe")
-      .select("id, pratica_id, codice_articolo, descrizione, riga_hash, status_riga")
-      .in("pratica_id", blocco);
-    if (error) throw error;
-    for (const r of data ?? []) mappaRigheEsistenti.set(`${r.pratica_id}|${r.codice_articolo}|${r.descrizione}`, r);
-  }
+  await Promise.all(
+    inBlocchi(idPraticheEsistenti).map(async (blocco) => {
+      const { data, error } = await supabase
+        .from("pratica_righe")
+        .select("id, pratica_id, codice_articolo, descrizione, riga_hash, status_riga")
+        .in("pratica_id", blocco);
+      if (error) throw error;
+      for (const r of data ?? []) mappaRigheEsistenti.set(`${r.pratica_id}|${r.codice_articolo}|${r.descrizione}`, r);
+    })
+  );
 
   // 1c. Fornitori: quelli gia' noti + creazione in blocco di quelli mancanti.
   const nomiFornitori = [...new Set(righe.map((r: any) => r.fornitore).filter(Boolean))] as string[];
   const mappaFornitori = new Map<string, string>();
-  for (const blocco of inBlocchi(nomiFornitori)) {
-    const { data, error } = await supabase.from("fornitori").select("id, ragione_sociale").in("ragione_sociale", blocco);
-    if (error) throw error;
-    for (const f of data ?? []) mappaFornitori.set(f.ragione_sociale, f.id);
-  }
+  await Promise.all(
+    inBlocchi(nomiFornitori).map(async (blocco) => {
+      const { data, error } = await supabase.from("fornitori").select("id, ragione_sociale").in("ragione_sociale", blocco);
+      if (error) throw error;
+      for (const f of data ?? []) mappaFornitori.set(f.ragione_sociale, f.id);
+    })
+  );
   const fornitoriMancanti = nomiFornitori.filter((n) => !mappaFornitori.has(n));
   if (fornitoriMancanti.length > 0) {
-    const { data, error } = await supabase
-      .from("fornitori")
-      .insert(fornitoriMancanti.map((ragione_sociale) => ({ ragione_sociale })))
-      .select("id, ragione_sociale");
-    if (error) throw error;
-    for (const f of data ?? []) mappaFornitori.set(f.ragione_sociale, f.id);
+    await Promise.all(
+      inBlocchi(fornitoriMancanti, 500).map(async (blocco) => {
+        const { data, error } = await supabase
+          .from("fornitori")
+          .insert(blocco.map((ragione_sociale) => ({ ragione_sociale })))
+          .select("id, ragione_sociale");
+        if (error) throw error;
+        for (const f of data ?? []) mappaFornitori.set(f.ragione_sociale, f.id);
+      })
+    );
   }
 
-  // 1d. Fasi attuali (pratica_fasi) per tutte le pratiche coinvolte, in un
-  // colpo solo, cosi' completaFasiPregresse/sincronizzaFasiDaRighe non
-  // devono piu' interrogare il database per ogni singola pratica.
+  // 1d. Fasi attuali (pratica_fasi) per tutte le pratiche coinvolte, cosi'
+  // completaFasiPregresse/sincronizzaFasiDaRighe non devono piu'
+  // interrogare il database per ogni singola pratica.
   const mappaFasiPerPratica = new Map<string, Map<string, any>>();
-  for (const blocco of inBlocchi(idPraticheEsistenti)) {
-    const { data, error } = await supabase
-      .from("pratica_fasi")
-      .select("id, pratica_id, fase_id, stato")
-      .in("pratica_id", blocco)
-      .in("fase_id", tutteLeFasiRilevanti);
-    if (error) throw error;
-    for (const f of data ?? []) {
-      if (!mappaFasiPerPratica.has(f.pratica_id)) mappaFasiPerPratica.set(f.pratica_id, new Map());
-      mappaFasiPerPratica.get(f.pratica_id)!.set(f.fase_id, f);
-    }
-  }
+  await Promise.all(
+    inBlocchi(idPraticheEsistenti).map(async (blocco) => {
+      const { data, error } = await supabase
+        .from("pratica_fasi")
+        .select("id, pratica_id, fase_id, stato")
+        .in("pratica_id", blocco)
+        .in("fase_id", tutteLeFasiRilevanti);
+      if (error) throw error;
+      for (const f of data ?? []) {
+        if (!mappaFasiPerPratica.has(f.pratica_id)) mappaFasiPerPratica.set(f.pratica_id, new Map());
+        mappaFasiPerPratica.get(f.pratica_id)!.set(f.fase_id, f);
+      }
+    })
+  );
 
   // ------------------------------------------------------------------
-  // FASE 2: confronto in memoria (nessuna query qui dentro) + raccolta
-  // delle scritture da fare, per poterle poi eseguire in blocco.
+  // FASE 2: confronto in memoria + scritture puntuali, con piu' pratiche
+  // lavorate in parallelo (vedi eseguiConConcorrenza) invece che una alla
+  // volta.
   // ------------------------------------------------------------------
   let nuoveRighe = 0;
   let praticheAggiornate = 0;
@@ -173,8 +208,9 @@ export async function eseguiImportazioneCsv(
   const righeDaInserire: any[] = [];
   const aggiornamentiRiga: { id: string; payload: any; statoPrecedente: string | null; statoNuovo: string | null }[] = [];
   const storicoPraticheDaInserire: any[] = [];
+  const erroriPratiche: { messaggio: string; dato: any }[] = [];
 
-  for (const pratica of pratiche) {
+  await eseguiConConcorrenza(pratiche, CONCORRENZA_PRATICHE, async (pratica: any) => {
     try {
       const praticaEsistente = mappaPraticheEsistenti.get(pratica.codice_commissione);
 
@@ -183,7 +219,7 @@ export async function eseguiImportazioneCsv(
       // questo codice, la riga non riguarda l'assistenza e va ignorata.
       if (!praticaEsistente) {
         praticheIgnorate++;
-        continue;
+        return;
       }
 
       const praticaId = praticaEsistente.id;
@@ -248,24 +284,27 @@ export async function eseguiImportazioneCsv(
       await sincronizzaFasiDaRighe(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
     } catch (err: any) {
       righeErrore++;
-      await supabase.from("importazioni_csv_errori").insert({
-        importazione_id: importazione.id,
-        messaggio_errore: String(err?.message || err),
-        dato_grezzo: pratica,
-      });
+      erroriPratiche.push({ messaggio: String(err?.message || err), dato: pratica });
     }
-  }
+  });
 
   // ------------------------------------------------------------------
-  // FASE 3: scritture in blocco (righe nuove, aggiornamenti, storico).
+  // FASE 3: scritture in blocco, in parallelo (righe nuove, aggiornamenti,
+  // storico, errori).
   // ------------------------------------------------------------------
-  for (const blocco of inBlocchi(righeDaInserire, 500)) {
-    const { error } = await supabase.from("pratica_righe").insert(blocco);
-    if (error) throw error;
-  }
+  await Promise.all(
+    inBlocchi(righeDaInserire, 500).map(async (blocco) => {
+      const { error } = await supabase.from("pratica_righe").insert(blocco);
+      if (error) throw error;
+    })
+  );
 
+  // Gli aggiornamenti (a differenza degli inserimenti) toccano righe gia'
+  // esistenti con valori diversi l'una dall'altra: non si possono
+  // raggruppare in un'unica query, ma vengono comunque lanciati con la
+  // stessa concorrenza controllata della FASE 2 invece che uno alla volta.
   const storicoRigheDaInserire: any[] = [];
-  for (const agg of aggiornamentiRiga) {
+  await eseguiConConcorrenza(aggiornamentiRiga, CONCORRENZA_PRATICHE, async (agg) => {
     const { error } = await supabase.from("pratica_righe").update(agg.payload).eq("id", agg.id);
     if (error) throw error;
     storicoRigheDaInserire.push({
@@ -276,23 +315,28 @@ export async function eseguiImportazioneCsv(
       valore_nuovo: agg.statoNuovo,
       origine: "importazione_csv",
     });
-  }
+  });
 
-  for (const blocco of inBlocchi([...storicoPraticheDaInserire, ...storicoRigheDaInserire], 500)) {
-    await supabase.from("storico_modifiche").insert(blocco);
-  }
+  await Promise.all(
+    inBlocchi([...storicoPraticheDaInserire, ...storicoRigheDaInserire], 500).map((blocco) =>
+      blocco.length > 0 ? supabase.from("storico_modifiche").insert(blocco) : Promise.resolve()
+    )
+  );
 
-  for (const blocco of inBlocchi(
-    erroriParsing.map((e) => ({
+  const erroriDaRegistrare = [
+    ...erroriPratiche.map((e) => ({ importazione_id: importazione.id, messaggio_errore: e.messaggio, dato_grezzo: e.dato })),
+    ...erroriParsing.map((e) => ({
       importazione_id: importazione.id,
       numero_riga: e.numero_riga,
       messaggio_errore: e.messaggio,
       dato_grezzo: e.dato_grezzo,
     })),
-    500
-  )) {
-    if (blocco.length > 0) await supabase.from("importazioni_csv_errori").insert(blocco);
-  }
+  ];
+  await Promise.all(
+    inBlocchi(erroriDaRegistrare, 500).map((blocco) =>
+      blocco.length > 0 ? supabase.from("importazioni_csv_errori").insert(blocco) : Promise.resolve()
+    )
+  );
 
   const totaleErrori = righeErrore + erroriParsing.length;
   const statoFinale: "completata" | "completata_con_errori" = totaleErrori > 0 ? "completata_con_errori" : "completata";
