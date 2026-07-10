@@ -35,7 +35,7 @@ export default function UploadCsvForm() {
       setStato("ok");
       setMessaggio(
         `Fatto: ${dati.righe_totali} righe lette, ${dati.pratiche_rilevate} pratiche trovate ` +
-          `(${dati.pratiche_aggiornate} aggiornate, ${dati.pratiche_invariate} invariate, ${dati.pratiche_ignorate} non di assistenza)` +
+          `(${dati.pratiche_aggiornate} assistenza aggiornate, ${dati.pratiche_invariate} invariate, ${dati.nuove_consegne ?? 0} nuove consegne)` +
           (dati.errori > 0 ? `, ${dati.errori} errori.` : ".")
       );
       if (inputRef.current) inputRef.current.value = "";
