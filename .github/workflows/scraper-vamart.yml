@@ -36,7 +36,11 @@ on:
 jobs:
   scrape-e-importa:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45 min: lo script di importazione Piano di Carico attuale fa query
+    # sequenziali riga per riga (non ancora ottimizzato come l'upload
+    # manuale dal pannello admin) -- con ~2300 pratiche puo' impiegare
+    # 15-20 minuti. Da ridurre quando lo script verra' ottimizzato.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -78,7 +82,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node importVamartCsv.mjs ../../scraper/downloads/ultimo-piano-di-carico.csv
 
-      - name: Carica i CSV scaricati come artifact (debug)
+      - name: Carica CSV scaricati e screenshot di debug come artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -86,6 +90,8 @@ jobs:
           path: |
             scraper/downloads/ultimo.csv
             scraper/downloads/ultimo-piano-di-carico.csv
+            scraper/downloads/debug-*.png
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Notifica fallimento
