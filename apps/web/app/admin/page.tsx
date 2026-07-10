@@ -5,7 +5,7 @@ import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
-import { alternaAnnullataPratica } from "./pratiche-actions";
+import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratiche-actions";
 import UploadCsvForm from "@/components/admin/UploadCsvForm";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
 
@@ -74,12 +74,16 @@ export default async function AdminPage({
       .ilike("nome_completo", `%${filtroPratiche}%`);
     const idClientiTrovati = (clientiTrovati ?? []).map((c: any) => c.id);
 
+    // Prefisso (non "contiene ovunque"): i codici Vamart sono nel formato
+    // "NUMERO/ANNO" (es. "68/25"), e una ricerca "contiene" farebbe comparire
+    // anche "168/25", "768/25", "1068/25" ecc. Chi cerca un codice pratica
+    // conosce sempre l'inizio esatto, mai una porzione a caso nel mezzo.
     if (idClientiTrovati.length > 0) {
       queryPratiche = queryPratiche.or(
-        `codice_commissione.ilike.%${filtroPratiche}%,cliente_id.in.(${idClientiTrovati.join(",")})`
+        `codice_commissione.ilike.${filtroPratiche}%,cliente_id.in.(${idClientiTrovati.join(",")})`
       );
     } else {
-      queryPratiche = queryPratiche.ilike("codice_commissione", `%${filtroPratiche}%`);
+      queryPratiche = queryPratiche.ilike("codice_commissione", `${filtroPratiche}%`);
     }
   }
 
@@ -350,6 +354,21 @@ export default async function AdminPage({
                       {p.stato_generale === "annullata" ? "Riattiva" : "Annulla pratica"}
                     </button>
                   </form>
+                  {p.stato_generale === "annullata" && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-xs text-red-800">Elimina definitivamente</summary>
+                      <form action={eliminaDefinitivamentePratica} className="mt-1 flex flex-col items-start gap-1">
+                        <input type="hidden" name="pratica_id" value={p.id} />
+                        <label className="flex items-center gap-1 text-xs text-red-800">
+                          <input type="checkbox" name="conferma" value="si" required />
+                          Confermo: cancella per sempre, non recuperabile
+                        </label>
+                        <button type="submit" className="bg-red-800 text-white text-xs rounded px-2 py-1">
+                          Elimina DEFINITIVAMENTE
+                        </button>
+                      </form>
+                    </details>
+                  )}
                 </td>
               </tr>
             ))}
