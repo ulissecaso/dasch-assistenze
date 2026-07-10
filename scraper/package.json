@@ -2,10 +2,10 @@
   "name": "dasch-scraper-gestionale",
   "version": "1.0.0",
   "type": "module",
-  "description": "Scraper opzionale per il download automatico del CSV dal portale del gestionale (solo se non è disponibile un export via email/API)",
+  "description": "Scraper automatico Vamart: scarica commissioni di assistenza + Piano di Carico e li importa in Supabase",
   "scripts": {
     "download": "node downloadCsvGestionale.mjs",
-    "pipeline": "node downloadCsvGestionale.mjs && node ../scripts/import-csv/importVamartCsv.mjs ./downloads/ultimo.csv"
+    "pipeline": "node downloadCsvGestionale.mjs && node ../scripts/import-csv/importCommissioniAssistenza.mjs ./downloads/ultimo.csv && node ../scripts/import-csv/importVamartCsv.mjs ./downloads/ultimo-piano-di-carico.csv"
   },
   "dependencies": {
     "playwright": "^1.47.0"
