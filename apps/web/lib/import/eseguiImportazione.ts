@@ -1,26 +1,24 @@
 // lib/import/eseguiImportazione.ts
 // Logica di scrittura condivisa dell'importazione "Piano di Carico" Vamart.
 //
-// STORIA (2 tentativi prima di questa versione):
-//  1. La prima versione rifaceva, riga per riga, fino a 4 domande al
-//     database. Su un file con migliaia di righe = migliaia di andirivieni
-//     in un'unica richiesta HTTP: timeout su Vercel, nessuna riga salvata.
-//  2. La seconda versione ha eliminato le query per-riga caricando in
-//     anticipo tutto cio' che serve con query "in blocco" (batch) — ma le
-//     eseguiva comunque UNA ALLA VOLTA, in sequenza (un blocco alla volta,
-//     una pratica alla volta): con un Piano di Carico che contiene TUTTE le
-//     commissioni Vamart (non solo assistenza, quindi potenzialmente
-//     migliaia di codici), la sola somma dei tempi di rete di tante
-//     richieste sequenziali bastava di nuovo a superare il timeout.
+// Il Piano di Carico contiene TUTTE le commissioni Vamart (vendite normali
+// comprese, non solo assistenza). Da quando esiste il modulo "Monitoraggio
+// Consegne" (vedi migrazione 0010_modulo_consegne.sql), le commissioni che
+// non corrispondono a nessuna pratica di ASSISTENZA esistente non vengono
+// piu' ignorate: diventano nuove pratiche con tipo='consegna', con un
+// workflow molto piu' semplice (due sole fasi umane, "Programma consegna" e
+// "Pagamento ricevuto", vedi sincronizzaFasiConsegna).
 //
-// Questa versione esegue le query in blocco IN PARALLELO (Promise.all)
-// invece che in sequenza, e processa le pratiche con piu' operai
-// concorrenti invece che una alla volta (vedi eseguiConConcorrenza): il
-// tempo totale diventa quello del blocco piu' lento, non la somma di tutti.
+// PERFORMANCE (storia in 3 tentativi, vedi commenti piu' sotto per il
+// dettaglio): query in blocco (chunk, .in()) lanciate IN PARALLELO
+// (Promise.all) invece che in sequenza, e piu' pratiche lavorate in
+// parallelo con un worker pool (eseguiConConcorrenza) invece che una alla
+// volta: il tempo totale diventa quello del blocco piu' lento, non la
+// somma di tutti.
 import { parseFileCompletoDaTesto } from "./parseCsvTesto";
 import { raggruppaInPratiche } from "./mapToDomain";
 
-const FASI_NECESSARIE = [
+const FASI_ASSISTENZA = [
   "ricezione",
   "presa_in_carico",
   "apertura_pratica",
@@ -30,19 +28,12 @@ const FASI_NECESSARIE = [
   "arrivo_merce",
   "consegna_materiale",
 ] as const;
+const FASI_CONSEGNA = ["pianificazione_consegna", "pagamento"] as const;
 
 const STATI_ORDINATO_O_OLTRE = new Set(["Ordinato", "In giacenza", "Parzialmente consegnato", "Consegnato"]);
 const STATI_ARRIVATO_O_OLTRE = new Set(["In giacenza", "Parzialmente consegnato", "Consegnato"]);
 
-// Le query con .in(...) hanno un limite pratico di lunghezza (URL/parametri):
-// spezziamo le liste lunghe in blocchi di questa dimensione. I blocchi
-// vengono poi lanciati tutti insieme (Promise.all), non uno alla volta.
 const DIMENSIONE_BLOCCO = 300;
-
-// Quante pratiche processare in parallelo nella FASE 2 (confronto CSV vs
-// database + scritture puntuali per fase). Un numero troppo alto rischia di
-// saturare le connessioni al database; questo valore e' un compromesso
-// prudente tra velocita' e stabilita'.
 const CONCORRENZA_PRATICHE = 20;
 
 function inBlocchi<T>(lista: T[], dimensione = DIMENSIONE_BLOCCO): T[][] {
@@ -51,10 +42,6 @@ function inBlocchi<T>(lista: T[], dimensione = DIMENSIONE_BLOCCO): T[][] {
   return blocchi;
 }
 
-/** Esegue `fn` su ogni elemento di `elementi`, con al massimo `concorrenza`
- *  chiamate in volo contemporaneamente (invece di farle tutte insieme, che
- *  rischierebbe di saturare le connessioni al database, o una alla volta,
- *  che sarebbe troppo lento). */
 async function eseguiConConcorrenza<T>(elementi: T[], concorrenza: number, fn: (el: T, indice: number) => Promise<void>) {
   let prossimo = 0;
   async function operaio() {
@@ -67,6 +54,32 @@ async function eseguiConConcorrenza<T>(elementi: T[], concorrenza: number, fn: (
   await Promise.all(Array.from({ length: numeroOperai }, operaio));
 }
 
+function payloadRigaDa(praticaId: string, riga: any, mappaFornitori: Map<string, string>) {
+  const fornitoreId = riga.fornitore ? mappaFornitori.get(riga.fornitore) ?? null : null;
+  return {
+    pratica_id: praticaId,
+    fornitore_id: fornitoreId,
+    codice_articolo: riga.codice_articolo,
+    descrizione: riga.descrizione,
+    quantita_venduta: riga.quantita_venduta,
+    listino: riga.listino,
+    quantita_ordinata: riga.quantita_ordinata,
+    data_ordine: riga.data_ordine,
+    conferma_ordine: riga.conferma_ordine,
+    rif_conferma: riga.rif_conferma,
+    pag_azienda: riga.pag_azienda,
+    data_consegna_prevista: riga.data_consegna_prevista,
+    quantita_giacente: riga.quantita_giacente,
+    data_carico: riga.data_carico,
+    quantita_consegnata: riga.quantita_consegnata,
+    data_consegna: riga.data_consegna,
+    status_riga: riga.status,
+    magazzino: riga.magazzino,
+    ubicazione: riga.ubicazione,
+    riga_hash: riga.riga_hash,
+  };
+}
+
 export type RisultatoImportazione = {
   importazioneId: string;
   righeTotali: number;
@@ -75,16 +88,13 @@ export type RisultatoImportazione = {
   praticheAggiornate: number;
   praticheInvariate: number;
   praticheIgnorate: number;
+  nuoveConsegne: number;
   righeErrore: number;
   erroriParsing: number;
   stato: "completata" | "completata_con_errori";
 };
 
-/** Esegue l'importazione completa di un CSV "Piano di Carico" Vamart: parsing,
- *  upsert delle righe, avanzamento automatico delle fasi (con lo stesso
- *  blocco umano su "conferma_ordine" del CLI) e registrazione della sessione
- *  in importazioni_csv. `origine` distingue nei log da dove arriva l'import
- *  (upload manuale dal pannello vs un futuro trigger automatico). */
+/** Esegue l'importazione completa di un CSV "Piano di Carico" Vamart. */
 export async function eseguiImportazioneCsv(
   supabase: any,
   testoCsv: string,
@@ -95,14 +105,15 @@ export async function eseguiImportazioneCsv(
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
     .select("id, codice")
-    .in("codice", FASI_NECESSARIE as unknown as string[]);
+    .in("codice", [...FASI_ASSISTENZA, ...FASI_CONSEGNA] as unknown as string[]);
   if (erroreFasi) throw erroreFasi;
 
   const fasiIds: Record<string, string> = Object.fromEntries((fasiWorkflow ?? []).map((f: any) => [f.codice, f.id]));
-  for (const codice of FASI_NECESSARIE) {
-    if (!fasiIds[codice]) {
-      throw new Error(`Fase '${codice}' non trovata in fasi_workflow (migrazione 0009_conferma_ordine.sql applicata?)`);
-    }
+  for (const codice of FASI_ASSISTENZA) {
+    if (!fasiIds[codice]) throw new Error(`Fase '${codice}' non trovata in fasi_workflow (migrazione 0009_conferma_ordine.sql applicata?)`);
+  }
+  for (const codice of FASI_CONSEGNA) {
+    if (!fasiIds[codice]) throw new Error(`Fase '${codice}' non trovata in fasi_workflow (migrazione 0010_modulo_consegne.sql applicata?)`);
   }
   const tutteLeFasiRilevanti = Object.values(fasiIds);
 
@@ -111,22 +122,14 @@ export async function eseguiImportazioneCsv(
 
   const { data: importazione, error: erroreImport } = await supabase
     .from("importazioni_csv")
-    .insert({
-      nome_file: opzioni.nomeFile,
-      origine,
-      righe_totali: righe.length,
-      stato: "in_corso",
-    })
+    .insert({ nome_file: opzioni.nomeFile, origine, righe_totali: righe.length, stato: "in_corso" })
     .select()
     .single();
   if (erroreImport) throw erroreImport;
 
   // ------------------------------------------------------------------
-  // FASE 1: pre-carico in blocco, IN PARALLELO, tutto cio' che serve per
-  // confrontare il CSV con lo stato attuale.
+  // FASE 1: pre-carico in blocco, IN PARALLELO, tutto cio' che serve.
   // ------------------------------------------------------------------
-
-  // 1a. Pratiche esistenti (match per codice_commissione).
   const codiciCommissione = [...new Set(pratiche.map((p: any) => p.codice_commissione))];
   const mappaPraticheEsistenti = new Map<string, any>();
   await Promise.all(
@@ -138,7 +141,6 @@ export async function eseguiImportazioneCsv(
   );
   const idPraticheEsistenti = [...mappaPraticheEsistenti.values()].map((p) => p.id);
 
-  // 1b. Righe gia' presenti per quelle pratiche (chiave: pratica+articolo+descrizione).
   const mappaRigheEsistenti = new Map<string, any>();
   await Promise.all(
     inBlocchi(idPraticheEsistenti).map(async (blocco) => {
@@ -151,7 +153,6 @@ export async function eseguiImportazioneCsv(
     })
   );
 
-  // 1c. Fornitori: quelli gia' noti + creazione in blocco di quelli mancanti.
   const nomiFornitori = [...new Set(righe.map((r: any) => r.fornitore).filter(Boolean))] as string[];
   const mappaFornitori = new Map<string, string>();
   await Promise.all(
@@ -165,19 +166,13 @@ export async function eseguiImportazioneCsv(
   if (fornitoriMancanti.length > 0) {
     await Promise.all(
       inBlocchi(fornitoriMancanti, 500).map(async (blocco) => {
-        const { data, error } = await supabase
-          .from("fornitori")
-          .insert(blocco.map((ragione_sociale) => ({ ragione_sociale })))
-          .select("id, ragione_sociale");
+        const { data, error } = await supabase.from("fornitori").insert(blocco.map((ragione_sociale) => ({ ragione_sociale }))).select("id, ragione_sociale");
         if (error) throw error;
         for (const f of data ?? []) mappaFornitori.set(f.ragione_sociale, f.id);
       })
     );
   }
 
-  // 1d. Fasi attuali (pratica_fasi) per tutte le pratiche coinvolte, cosi'
-  // completaFasiPregresse/sincronizzaFasiDaRighe non devono piu'
-  // interrogare il database per ogni singola pratica.
   const mappaFasiPerPratica = new Map<string, Map<string, any>>();
   await Promise.all(
     inBlocchi(idPraticheEsistenti).map(async (blocco) => {
@@ -194,15 +189,37 @@ export async function eseguiImportazioneCsv(
     })
   );
 
+  // Clienti: servono solo per le commissioni NON di assistenza (candidate
+  // "consegna"), gia' esistenti o da creare al volo.
+  const praticheDaCreare = pratiche.filter((p: any) => !mappaPraticheEsistenti.has(p.codice_commissione));
+  const nomiClienti = [...new Set(praticheDaCreare.map((p: any) => p.cliente).filter(Boolean))] as string[];
+  const mappaClienti = new Map<string, string>();
+  if (nomiClienti.length > 0) {
+    await Promise.all(
+      inBlocchi(nomiClienti).map(async (blocco) => {
+        const { data, error } = await supabase.from("clienti").select("id, nome_completo").in("nome_completo", blocco);
+        if (error) throw error;
+        for (const c of data ?? []) mappaClienti.set(c.nome_completo, c.id);
+      })
+    );
+    const clientiMancanti = nomiClienti.filter((n) => !mappaClienti.has(n));
+    if (clientiMancanti.length > 0) {
+      await Promise.all(
+        inBlocchi(clientiMancanti, 500).map(async (blocco) => {
+          const { data, error } = await supabase.from("clienti").insert(blocco.map((nome_completo) => ({ nome_completo }))).select("id, nome_completo");
+          if (error) throw error;
+          for (const c of data ?? []) mappaClienti.set(c.nome_completo, c.id);
+        })
+      );
+    }
+  }
+
   // ------------------------------------------------------------------
-  // FASE 2: confronto in memoria + scritture puntuali, con piu' pratiche
-  // lavorate in parallelo (vedi eseguiConConcorrenza) invece che una alla
-  // volta.
+  // FASE 2: confronto in memoria + scritture puntuali per le pratiche di
+  // ASSISTENZA gia' esistenti, con piu' pratiche lavorate in parallelo.
   // ------------------------------------------------------------------
-  let nuoveRighe = 0;
   let praticheAggiornate = 0;
   let praticheInvariate = 0;
-  let praticheIgnorate = 0;
   let righeErrore = 0;
 
   const righeDaInserire: any[] = [];
@@ -210,28 +227,18 @@ export async function eseguiImportazioneCsv(
   const storicoPraticheDaInserire: any[] = [];
   const erroriPratiche: { messaggio: string; dato: any }[] = [];
 
-  await eseguiConConcorrenza(pratiche, CONCORRENZA_PRATICHE, async (pratica: any) => {
+  const praticheEsistentiDaConfrontare = pratiche.filter((p: any) => mappaPraticheEsistenti.has(p.codice_commissione));
+
+  await eseguiConConcorrenza(praticheEsistentiDaConfrontare, CONCORRENZA_PRATICHE, async (pratica: any) => {
     try {
       const praticaEsistente = mappaPraticheEsistenti.get(pratica.codice_commissione);
-
-      // Il Piano di Carico contiene TUTTE le commissioni Vamart (anche
-      // vendite normali): se non esiste gia' una pratica di assistenza con
-      // questo codice, la riga non riguarda l'assistenza e va ignorata.
-      if (!praticaEsistente) {
-        praticheIgnorate++;
-        return;
-      }
-
       const praticaId = praticaEsistente.id;
+
       if (praticaEsistente.stato_generale !== pratica.stato_generale) {
         await supabase.from("pratiche").update({ stato_generale: pratica.stato_generale }).eq("id", praticaId);
         storicoPraticheDaInserire.push({
-          entita: "pratica",
-          entita_id: praticaId,
-          campo: "stato_generale",
-          valore_precedente: praticaEsistente.stato_generale,
-          valore_nuovo: pratica.stato_generale,
-          origine: "importazione_csv",
+          entita: "pratica", entita_id: praticaId, campo: "stato_generale",
+          valore_precedente: praticaEsistente.stato_generale, valore_nuovo: pratica.stato_generale, origine: "importazione_csv",
         });
         praticheAggiornate++;
       } else {
@@ -239,49 +246,23 @@ export async function eseguiImportazioneCsv(
       }
 
       for (const riga of pratica.righe) {
-        const fornitoreId = riga.fornitore ? mappaFornitori.get(riga.fornitore) ?? null : null;
         const chiave = `${praticaId}|${riga.codice_articolo}|${riga.descrizione}`;
         const rigaEsistente = mappaRigheEsistenti.get(chiave);
-
-        const payloadRiga = {
-          pratica_id: praticaId,
-          fornitore_id: fornitoreId,
-          codice_articolo: riga.codice_articolo,
-          descrizione: riga.descrizione,
-          quantita_venduta: riga.quantita_venduta,
-          listino: riga.listino,
-          quantita_ordinata: riga.quantita_ordinata,
-          data_ordine: riga.data_ordine,
-          conferma_ordine: riga.conferma_ordine,
-          rif_conferma: riga.rif_conferma,
-          pag_azienda: riga.pag_azienda,
-          data_consegna_prevista: riga.data_consegna_prevista,
-          quantita_giacente: riga.quantita_giacente,
-          data_carico: riga.data_carico,
-          quantita_consegnata: riga.quantita_consegnata,
-          data_consegna: riga.data_consegna,
-          status_riga: riga.status,
-          magazzino: riga.magazzino,
-          ubicazione: riga.ubicazione,
-          riga_hash: riga.riga_hash,
-        };
-
+        const payload = payloadRigaDa(praticaId, riga, mappaFornitori);
         if (!rigaEsistente) {
-          righeDaInserire.push(payloadRiga);
-          nuoveRighe++;
+          righeDaInserire.push(payload);
         } else if (rigaEsistente.riga_hash !== riga.riga_hash) {
-          aggiornamentiRiga.push({
-            id: rigaEsistente.id,
-            payload: payloadRiga,
-            statoPrecedente: rigaEsistente.status_riga,
-            statoNuovo: riga.status,
-          });
+          aggiornamentiRiga.push({ id: rigaEsistente.id, payload, statoPrecedente: rigaEsistente.status_riga, statoNuovo: riga.status });
         }
       }
 
       const fasiDiQuestaPratica = mappaFasiPerPratica.get(praticaId) ?? new Map();
-      await completaFasiPregresse(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
-      await sincronizzaFasiDaRighe(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
+      if (praticaEsistente.tipo === "consegna") {
+        await sincronizzaFasiConsegna(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
+      } else {
+        await completaFasiPregresseAssistenza(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
+        await sincronizzaFasiAssistenza(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
+      }
     } catch (err: any) {
       righeErrore++;
       erroriPratiche.push({ messaggio: String(err?.message || err), dato: pratica });
@@ -289,31 +270,85 @@ export async function eseguiImportazioneCsv(
   });
 
   // ------------------------------------------------------------------
-  // FASE 3: scritture in blocco, in parallelo (righe nuove, aggiornamenti,
-  // storico, errori).
+  // FASE 2.5: crea le pratiche "consegna" per le commissioni normali che
+  // non esistevano ancora (vedi migrazione 0010_modulo_consegne.sql).
+  // ------------------------------------------------------------------
+  let nuoveConsegne = 0;
+  if (praticheDaCreare.length > 0) {
+    const payloadNuovePratiche = praticheDaCreare.map((p: any) => ({
+      codice_commissione: p.codice_commissione,
+      codice_commissione_riferimento: p.codice_commissione,
+      cliente_id: mappaClienti.get(p.cliente),
+      tipo: "consegna",
+      categoria: p.categoria,
+      canale_origine: "csv",
+      fonte_dati: "csv",
+      stato_generale: p.stato_generale,
+      data_apertura: p.data_commissione || new Date().toISOString(),
+      data_consegna_prevista: p.data_consegna_cliente,
+    }));
+
+    const mappaNuovePratiche = new Map<string, string>();
+    await Promise.all(
+      inBlocchi(payloadNuovePratiche, 500).map(async (blocco) => {
+        if (blocco.length === 0) return;
+        const { data, error } = await supabase.from("pratiche").insert(blocco).select("id, codice_commissione");
+        if (error) throw error;
+        for (const p of data ?? []) mappaNuovePratiche.set(p.codice_commissione, p.id);
+      })
+    );
+    nuoveConsegne = mappaNuovePratiche.size;
+
+    for (const p of praticheDaCreare) {
+      const praticaId = mappaNuovePratiche.get(p.codice_commissione);
+      if (!praticaId) continue;
+      for (const riga of p.righe) righeDaInserire.push(payloadRigaDa(praticaId, riga, mappaFornitori));
+    }
+
+    const idNuovePratiche = [...mappaNuovePratiche.values()];
+    const mappaFasiNuovePratiche = new Map<string, Map<string, any>>();
+    await Promise.all(
+      inBlocchi(idNuovePratiche).map(async (blocco) => {
+        if (blocco.length === 0) return;
+        const { data, error } = await supabase
+          .from("pratica_fasi")
+          .select("id, pratica_id, fase_id, stato")
+          .in("pratica_id", blocco)
+          .in("fase_id", [fasiIds.pianificazione_consegna, fasiIds.pagamento]);
+        if (error) throw error;
+        for (const f of data ?? []) {
+          if (!mappaFasiNuovePratiche.has(f.pratica_id)) mappaFasiNuovePratiche.set(f.pratica_id, new Map());
+          mappaFasiNuovePratiche.get(f.pratica_id)!.set(f.fase_id, f);
+        }
+      })
+    );
+
+    await eseguiConConcorrenza(praticheDaCreare, CONCORRENZA_PRATICHE, async (p: any) => {
+      const praticaId = mappaNuovePratiche.get(p.codice_commissione);
+      if (!praticaId) return;
+      const fasiDiQuestaPratica = mappaFasiNuovePratiche.get(praticaId) ?? new Map();
+      await sincronizzaFasiConsegna(supabase, praticaId, p.righe, fasiIds, fasiDiQuestaPratica);
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // FASE 3: scritture in blocco, in parallelo.
   // ------------------------------------------------------------------
   await Promise.all(
     inBlocchi(righeDaInserire, 500).map(async (blocco) => {
+      if (blocco.length === 0) return;
       const { error } = await supabase.from("pratica_righe").insert(blocco);
       if (error) throw error;
     })
   );
 
-  // Gli aggiornamenti (a differenza degli inserimenti) toccano righe gia'
-  // esistenti con valori diversi l'una dall'altra: non si possono
-  // raggruppare in un'unica query, ma vengono comunque lanciati con la
-  // stessa concorrenza controllata della FASE 2 invece che uno alla volta.
   const storicoRigheDaInserire: any[] = [];
   await eseguiConConcorrenza(aggiornamentiRiga, CONCORRENZA_PRATICHE, async (agg) => {
     const { error } = await supabase.from("pratica_righe").update(agg.payload).eq("id", agg.id);
     if (error) throw error;
     storicoRigheDaInserire.push({
-      entita: "pratica_riga",
-      entita_id: agg.id,
-      campo: "status_riga",
-      valore_precedente: agg.statoPrecedente,
-      valore_nuovo: agg.statoNuovo,
-      origine: "importazione_csv",
+      entita: "pratica_riga", entita_id: agg.id, campo: "status_riga",
+      valore_precedente: agg.statoPrecedente, valore_nuovo: agg.statoNuovo, origine: "importazione_csv",
     });
   });
 
@@ -344,7 +379,7 @@ export async function eseguiImportazioneCsv(
   await supabase
     .from("importazioni_csv")
     .update({
-      righe_nuove: nuoveRighe,
+      righe_nuove: righeDaInserire.length,
       righe_aggiornate: praticheAggiornate,
       righe_invariate: praticheInvariate,
       righe_errore: totaleErrori,
@@ -357,23 +392,21 @@ export async function eseguiImportazioneCsv(
     importazioneId: importazione.id,
     righeTotali: righe.length,
     praticheRilevate: pratiche.length,
-    nuoveRighe,
+    nuoveRighe: righeDaInserire.length,
     praticheAggiornate,
     praticheInvariate,
-    praticheIgnorate,
+    praticheIgnorate: 0,
+    nuoveConsegne,
     righeErrore,
     erroriParsing: erroriParsing.length,
     stato: statoFinale,
   };
 }
 
-/** Se dal Piano di Carico risulta gia' almeno una riga "Ordinato" o oltre,
- *  le fasi a monte sono evidentemente gia' avvenute: le completiamo anche
- *  se nessun operatore le ha mai segnate su Dasch (evita falsi allarmi su
- *  pratiche in realta' gia' avanzate da tempo). Stessa logica del CLI, ma
- *  legge le fasi attuali dalla mappa pre-caricata invece di interrogare il
- *  database (unica differenza rispetto allo script da terminale). */
-async function completaFasiPregresse(
+// ---------------------------------------------------------------------
+// ASSISTENZA (invariato rispetto alla versione precedente)
+// ---------------------------------------------------------------------
+async function completaFasiPregresseAssistenza(
   supabase: any,
   praticaId: string,
   righe: any[],
@@ -400,12 +433,7 @@ async function completaFasiPregresse(
     .in("id", idFasiDaCompletare);
 }
 
-/** Fa avanzare "Invio ordine ricambi" / "Arrivo merce in deposito" /
- *  "Consegna materiale" in base allo stato aggregato delle righe. Identico
- *  al CLI, incluso il blocco umano: "arrivo_merce" non avanza mai finche'
- *  l'operatore non dichiara a mano "conferma_ordine" sulla pratica. Legge le
- *  fasi attuali dalla mappa pre-caricata invece che con una query dedicata. */
-async function sincronizzaFasiDaRighe(
+async function sincronizzaFasiAssistenza(
   supabase: any,
   praticaId: string,
   righe: any[],
@@ -421,7 +449,7 @@ async function sincronizzaFasiDaRighe(
   const faseConfermaOrdine = perFase.get(fasiIds.conferma_ordine);
   if (tutteOrdinate && faseConfermaOrdine && faseConfermaOrdine.stato === "da_iniziare") {
     await supabase.from("pratica_fasi").update({ stato: "in_corso" }).eq("id", faseConfermaOrdine.id);
-    faseConfermaOrdine.stato = "in_corso"; // aggiorna la mappa in memoria per coerenza nel resto di questa chiamata
+    faseConfermaOrdine.stato = "in_corso";
   }
   const confermaOrdineFatta = faseConfermaOrdine?.stato === "completata";
 
@@ -464,4 +492,33 @@ async function sincronizzaFasiDaRighe(
         .not("stato_generale", "in", "(chiusa,annullata)");
     }
   }
+}
+
+// ---------------------------------------------------------------------
+// CONSEGNA (nuovo): due sole fasi umane, "Programma consegna" e "Pagamento
+// ricevuto", che partono INSIEME quando tutte le righe risultano arrivate
+// in deposito. Si completano solo con una dichiarazione manuale
+// dell'operatore, mai in automatico da questo importatore -- stesso
+// principio di "conferma_ordine" nell'assistenza.
+// ---------------------------------------------------------------------
+async function sincronizzaFasiConsegna(
+  supabase: any,
+  praticaId: string,
+  righe: any[],
+  fasiIds: Record<string, string>,
+  perFase: Map<string, any>
+) {
+  if (!righe || righe.length === 0) return;
+
+  const tutteArrivate = righe.every((r) => STATI_ARRIVATO_O_OLTRE.has(r.status));
+  if (!tutteArrivate) return;
+
+  const daAttivare = [fasiIds.pianificazione_consegna, fasiIds.pagamento]
+    .map((faseId) => perFase.get(faseId))
+    .filter((f) => f && f.stato === "da_iniziare")
+    .map((f) => f.id);
+
+  if (daAttivare.length === 0) return;
+
+  await supabase.from("pratica_fasi").update({ stato: "in_corso" }).in("id", daAttivare);
 }
