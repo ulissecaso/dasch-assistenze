@@ -3,7 +3,7 @@
 import { creaSupabaseClientServer } from "@/lib/supabase/server";
 import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
-import { creaOperatore, creaAdmin, alternaAttivoUtente } from "./operatori-actions";
+import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
 import { alternaAnnullataPratica } from "./pratiche-actions";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
@@ -359,7 +359,7 @@ export default async function AdminPage({
                   )}
                 </td>
                 <td>{u.attivo ? "Sì" : "No"}</td>
-                <td>
+                <td className="flex flex-wrap items-start gap-3 py-1">
                   <form action={alternaAttivoUtente}>
                     <input type="hidden" name="id" value={u.id} />
                     <input type="hidden" name="nuovo_stato" value={(!u.attivo).toString()} />
@@ -367,6 +367,37 @@ export default async function AdminPage({
                       {u.attivo ? "Disattiva" : "Riattiva"}
                     </button>
                   </form>
+
+                  {u.ruolo === "operatore" ? (
+                    <form action={rigeneraCodiceOperatore}>
+                      <input type="hidden" name="id" value={u.id} />
+                      <button
+                        type="submit"
+                        className="text-xs underline text-blue-700"
+                        title="Genera un nuovo codice di accesso: il vecchio smette subito di funzionare"
+                      >
+                        Rigenera codice
+                      </button>
+                    </form>
+                  ) : (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-blue-700 underline">Cambia password</summary>
+                      <form action={cambiaPasswordAdmin} className="mt-2 flex items-center gap-2">
+                        <input type="hidden" name="id" value={u.id} />
+                        <input
+                          type="password"
+                          name="password"
+                          required
+                          minLength={6}
+                          placeholder="Nuova password"
+                          className="border rounded px-2 py-1"
+                        />
+                        <button type="submit" className="bg-gray-900 text-white rounded px-2 py-1">
+                          Salva
+                        </button>
+                      </form>
+                    </details>
+                  )}
                 </td>
               </tr>
             ))}
