@@ -14,6 +14,9 @@ export const ICONA_PER_FASE: Record<string, string> = {
   preparazione_intervento: "box",
   consegna_materiale: "truck",
   chiusura_assistenza: "check",
+  // Modulo Consegne (migrazione 0010_modulo_consegne.sql).
+  pianificazione_consegna: "truck",
+  pagamento: "check",
 };
 
 export const AZIONE_PER_FASE: Record<string, string> = {
@@ -27,6 +30,9 @@ export const AZIONE_PER_FASE: Record<string, string> = {
   preparazione_intervento: "Preparare intervento",
   consegna_materiale: "Organizzare consegna",
   chiusura_assistenza: "Chiudere assistenza",
+  // Modulo Consegne (migrazione 0010_modulo_consegne.sql).
+  pianificazione_consegna: "Fissare la consegna sul Planning Vamart",
+  pagamento: "Sollecitare il pagamento",
 };
 
 /** @deprecated Non piu' usata per calcolare la priorita' mostrata a monitor:
