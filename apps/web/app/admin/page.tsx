@@ -5,6 +5,7 @@ import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
+import { alternaAnnullataPratica } from "./pratiche-actions";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
 
 export const dynamic = "force-dynamic";
@@ -39,20 +40,41 @@ function raggruppaPerFase(regoleAlert: any[]): RegolaFase[] {
     .sort((a, b) => a.ordine - b.ordine);
 }
 
-export default async function AdminPage() {
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams?: { q?: string };
+}) {
   await richiediAdmin();
   const supabase = creaSupabaseClientServer();
+
+  const filtroPratiche = searchParams?.q?.trim() ?? "";
+
+  let queryPratiche = supabase
+    .from("pratiche")
+    .select("id, codice_commissione, stato_generale, created_at, clienti(nome_completo), utenti:operatore_assegnato_id(nome, cognome)")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (filtroPratiche) {
+    // Cerca sia nel codice commissione sia nel nome cliente: copre sia il
+    // caso "conosco il numero pratica" sia "conosco solo il cliente".
+    queryPratiche = queryPratiche.or(
+      `codice_commissione.ilike.%${filtroPratiche}%,clienti.nome_completo.ilike.%${filtroPratiche}%`
+    );
+  }
 
   const [
     { data: operatori, error: erroreOperatori },
     { data: regoleAssegnazione, error: erroreRegoleAssegnazione },
     { data: regoleAlert, error: erroreRegoleAlert },
     { data: importazioni, error: erroreImportazioni },
+    { data: pratiche, error: errorePratiche },
   ] = await Promise.all([
     supabase.from("utenti").select("*").order("cognome"),
     supabase.from("regole_assegnazione").select("*, utenti(nome, cognome)").order("priorita"),
     supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine)").eq("attiva", true),
     supabase.from("importazioni_csv").select("*").order("iniziata_il", { ascending: false }).limit(20),
+    queryPratiche,
   ]);
 
   const erroriQuery = [
@@ -60,6 +82,7 @@ export default async function AdminPage() {
     erroreRegoleAssegnazione && `regole_assegnazione: ${erroreRegoleAssegnazione.message}`,
     erroreRegoleAlert && `regole_alert: ${erroreRegoleAlert.message}`,
     erroreImportazioni && `importazioni_csv: ${erroreImportazioni.message}`,
+    errorePratiche && `pratiche: ${errorePratiche.message}`,
   ].filter(Boolean) as string[];
 
   const fasiConfigurabili = raggruppaPerFase(regoleAlert ?? []);
@@ -252,6 +275,68 @@ export default async function AdminPage() {
           </tbody>
         </table>
         {/* Upload manuale: componente client che fa POST a /api/import-csv */}
+      </section>
+
+      <section className="bg-white rounded-xl shadow p-4">
+        <h2 className="text-lg font-medium mb-1">Gestione pratiche</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Solo admin e responsabili possono annullare una pratica (es. pratiche di prova/test): l&apos;operatore non ha questa possibilità e deve sempre chiedere qui.
+          Annullare NON cancella i dati: la pratica sparisce da dashboard, conteggi e alert ma resta recuperabile con &quot;Riattiva&quot;.
+        </p>
+        <form method="get" className="mb-3 flex gap-2 max-w-md">
+          <input
+            type="text"
+            name="q"
+            defaultValue={filtroPratiche}
+            placeholder="Cerca per codice pratica o nome cliente..."
+            className="flex-1 border rounded px-2 py-1 text-sm"
+          />
+          <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5">
+            Cerca
+          </button>
+        </form>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500">
+              <th className="py-1">Pratica</th><th>Cliente</th><th>Operatore</th><th>Stato</th><th>Aperta il</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(pratiche ?? []).map((p: any) => (
+              <tr key={p.id} className="border-t">
+                <td className="py-1">
+                  <a href={`/pratiche/${p.id}`} className="text-blue-700 underline">{p.codice_commissione}</a>
+                </td>
+                <td>{p.clienti?.nome_completo ?? "—"}</td>
+                <td>{p.utenti ? `${p.utenti.nome} ${p.utenti.cognome}` : "Non assegnato"}</td>
+                <td>
+                  <span className={p.stato_generale === "annullata" ? "text-red-600 font-medium" : ""}>
+                    {p.stato_generale}
+                  </span>
+                </td>
+                <td>{new Date(p.created_at).toLocaleDateString("it-IT")}</td>
+                <td>
+                  <form action={alternaAnnullataPratica}>
+                    <input type="hidden" name="pratica_id" value={p.id} />
+                    <input type="hidden" name="nuovo_stato" value={p.stato_generale === "annullata" ? "aperta" : "annullata"} />
+                    <button
+                      type="submit"
+                      className={`text-xs underline ${p.stato_generale === "annullata" ? "text-green-700" : "text-red-600"}`}
+                    >
+                      {p.stato_generale === "annullata" ? "Riattiva" : "Annulla pratica"}
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+            {(pratiche ?? []).length === 0 && (
+              <tr><td colSpan={6} className="py-2 text-gray-400">Nessuna pratica trovata{filtroPratiche ? " per questa ricerca" : ""}.</td></tr>
+            )}
+          </tbody>
+        </table>
+        <p className="text-xs text-gray-400 mt-2">
+          Mostrate al massimo 50 pratiche{filtroPratiche ? " per questa ricerca" : " (le più recenti)"}: usa la ricerca per trovarne altre.
+        </p>
       </section>
 
       <section className="bg-white rounded-xl shadow p-4">
