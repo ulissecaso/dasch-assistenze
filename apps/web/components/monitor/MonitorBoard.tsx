@@ -63,6 +63,14 @@ export default function MonitorBoard({
   // dashboard autenticate (direzione e operatore) invece vogliono poter
   // aprire la pratica cliccando sulla riga, quindi di default è true.
   righeCliccabili = true,
+  // Impronta grafica per distinguere a colpo d'occhio i due monitor gemelli
+  // (Assistenza vs Consegne): un colore di accento + un'icona di modulo
+  // accanto al titolo, oltre a una sottile barra colorata in cima alla
+  // board. Non tocca i colori semantici degli alert (rosso/arancio/giallo/
+  // verde), che restano identici in entrambe le varianti. Se non impostata
+  // (es. dashboard-operatore, che mostra pratiche miste) non compare nessun
+  // accento: resta l'aspetto neutro originale.
+  variante,
 }: {
   titolo: ReactNode;
   operatori: OperatoreCardMonitor[];
@@ -72,7 +80,10 @@ export default function MonitorBoard({
   mostraSelettoreSchermoIntero?: boolean;
   righeMax?: number;
   righeCliccabili?: boolean;
+  variante?: "assistenza" | "consegna";
 }) {
+  const accento = variante === "consegna" ? "#f59e0b" : variante === "assistenza" ? "#6366f1" : null;
+  const iconaModulo = variante === "consegna" ? "truck" : "headset";
   const [ora, setOra] = useState<{ data: string; clock: string }>({ data: "", clock: "" });
   const [kiosk, setKiosk] = useState(false);
   const [soloUrgenti, setSoloUrgenti] = useState(false);
@@ -112,7 +123,8 @@ export default function MonitorBoard({
   return (
     <div ref={boardRef} className="mon-wrap">
       <style>{CSS}</style>
-      <div className="monitor-board">
+      <div className="monitor-board" style={accento ? ({ "--accento": accento } as any) : undefined}>
+        {accento && <div className="mon-accento-bar" />}
         <div className="mon-topbar">
           {mostraSelettoreSchermoIntero ? (
             <button className="mon-exit" onClick={toggleKiosk}>
@@ -153,7 +165,14 @@ export default function MonitorBoard({
               </div>
             ))}
           </div>
-          <h1>{titolo}</h1>
+          <div className="mon-titolo-block">
+            {accento && (
+              <span className="mon-modulo-badge" style={{ background: accento }}>
+                <Icona nome={iconaModulo} className="ic" />
+              </span>
+            )}
+            <h1>{titolo}</h1>
+          </div>
         </div>
 
         <div className="mon-table-wrap">
@@ -207,8 +226,12 @@ export default function MonitorBoard({
 const CSS = `
 .mon-wrap{background:#0a0e16;height:100%;display:flex;flex-direction:column;}
 .mon-wrap:fullscreen{overflow:auto;padding:22px 28px;}
-.monitor-board{background:#0a0e16;color:#e5e7eb;padding:14px 22px;border-radius:16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+.monitor-board{position:relative;background:#0a0e16;color:#e5e7eb;padding:14px 22px;border-radius:16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
   display:flex;flex-direction:column;height:100%;box-sizing:border-box;overflow:hidden;}
+.mon-accento-bar{position:absolute;top:0;left:0;right:0;height:4px;background:var(--accento);border-radius:16px 16px 0 0;}
+.mon-titolo-block{display:flex;align-items:center;gap:11px;}
+.mon-modulo-badge{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 0 12px 1px var(--accento);}
+.mon-modulo-badge .ic{width:21px;height:21px;color:#fff;}
 .mon-topbar{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;}
 .mon-exit{background:#1a2130;color:#9ca3af;border:1px solid #2a3242;border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;flex-shrink:0;}
 .mon-title-center{flex:1 1 auto;display:flex;align-items:baseline;justify-content:center;gap:14px;flex-wrap:wrap;}
