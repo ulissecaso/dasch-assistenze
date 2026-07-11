@@ -16,7 +16,7 @@ export async function caricaDatiDirezione(supabase: any) {
   const adesso = new Date().toISOString();
   const adessoMs = Date.now();
 
-  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriAttivi }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
+  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegole }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
     // Query "conteggio": alimenta le card per operatore e le statistiche
     // (scaduti, in scadenza oggi, urgenti...). Volutamente SENZA il limite
     // usato per la tabella: se la limitassimo, un operatore con tante fasi
@@ -28,10 +28,11 @@ export async function caricaDatiDirezione(supabase: any) {
       .from("pratica_fasi")
       .select(`
         id, data_prevista, fase_id,
-        pratiche(id, stato_generale, operatore_assegnato_id)
+        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo)
       `)
       .in("stato", ["da_iniziare", "in_corso"])
       .lt("data_prevista", adesso)
+      .eq("pratiche.tipo", "assistenza")
       .limit(5000),
     // Query "tabella": righe da mostrare nel Monitor Assistenze, ordinate
     // dalla più urgente (più vecchia) in su. Questo limite serve solo a
@@ -42,16 +43,26 @@ export async function caricaDatiDirezione(supabase: any) {
       .select(`
         id, stato, data_prevista, fase_id,
         fasi_workflow(codice, nome),
-        pratiche(id, codice_commissione, stato_generale, operatore_assegnato_id,
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
           clienti(nome_completo),
           utenti:operatore_assegnato_id(id, nome, cognome, colore_badge)
         )
       `)
       .in("stato", ["da_iniziare", "in_corso"])
       .lt("data_prevista", adesso)
+      .eq("pratiche.tipo", "assistenza")
       .order("data_prevista", { ascending: true })
       .limit(300),
-    supabase.from("utenti").select("id, nome, cognome, colore_badge").eq("ruolo", "operatore").eq("attivo", true).order("nome"),
+    // Operatori da mostrare come card: solo chi ha una regola di assegnazione
+    // ATTIVA di tipo "assistenza" (stesso pattern di caricaDatiConsegne.ts).
+    // Prima si prendevano TUTTI gli operatori attivi senza distinzione di
+    // tipo, per cui operatori solo-Consegne (es. Francesca, Lucia)
+    // comparivano anche nel Monitor Assistenza con 0 alert.
+    supabase
+      .from("regole_assegnazione")
+      .select("utenti:operatore_id(id, nome, cognome, colore_badge)")
+      .eq("tipo_pratica", "assistenza")
+      .eq("attiva", true),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).not("stato_generale", "in", '("chiusa","annullata")'),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
@@ -125,9 +136,21 @@ export async function caricaDatiDirezione(supabase: any) {
     };
   });
 
+  // Dedup: piu' regole (es. A-C, D-M, N-Z) possono puntare allo stesso
+  // operatore, quindi raccogliamo gli utenti unici tramite una Map per id.
+  const operatoriAssistenza = Array.from(
+    new Map(
+      (operatoriRegole ?? [])
+        .filter((r: any) => r.utenti)
+        .map((r: any) => [r.utenti.id, r.utenti])
+    ).values()
+  ) as { id: string; nome: string; cognome: string; colore_badge: string | null }[];
+
   // Le card per operatore e le statistiche usano SEMPRE il set completo
   // (righeConLivelloConteggio), mai quello troncato della tabella.
-  const operatori: OperatoreCardMonitor[] = (operatoriAttivi ?? []).map((op: any) => {
+  const operatori: OperatoreCardMonitor[] = operatoriAssistenza
+    .sort((a, b) => a.nome.localeCompare(b.nome))
+    .map((op: any) => {
     const righeOp = righeConLivelloConteggio.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
     return {
       id: op.id,
