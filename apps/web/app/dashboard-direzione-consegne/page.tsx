@@ -22,6 +22,7 @@ export default async function DashboardDirezioneConsegnePage() {
         stats={stats}
         righeMax={11}
         messaggioVuoto="Nessun alert al momento: tutte le consegne sono in linea con le scadenze."
+        variante="consegna"
       />
     </div>
   );
