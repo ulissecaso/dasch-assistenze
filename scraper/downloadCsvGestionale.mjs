@@ -66,6 +66,16 @@ function locatorFiltroAssistenza(page) {
   ).first();
 }
 
+// Individua il campo data (testo libero, formato gg/mm/aaaa) che segue una
+// certa etichetta: usato per "Dalla/Alla Data Commissione" nel Piano di
+// Carico (vedi commento piu' sotto sul perche' e' fondamentale azzerarli).
+function locatorCampoData(page, etichetta) {
+  return page.locator(
+    `xpath=//label[contains(normalize-space(.),"${etichetta}")]/following::input[1] ` +
+    `| //*[contains(normalize-space(text()),"${etichetta}")]/following::input[1]`
+  ).first();
+}
+
 async function scaricaCsv() {
   if (!GESTIONALE_URL || !GESTIONALE_USER || !GESTIONALE_PASS) {
     throw new Error("Impostare GESTIONALE_URL, GESTIONALE_USER, GESTIONALE_PASS come variabili d'ambiente");
@@ -134,12 +144,41 @@ async function scaricaCsv() {
       // il Piano di Carico deve invece contenere TUTTE le commissioni.
       console.log('   Reimposto filtro "Commissioni Assistenza" = "Tutti" (evita di ereditare il filtro della pagina Commissioni)...');
       const filtroPiano = locatorFiltroAssistenza(page);
+      let vaFiltrato = false;
       if (await filtroPiano.count() > 0) {
         await filtroPiano.selectOption({ label: "Tutti" });
-        await page.getByRole("button", { name: "Filtra" }).click();
-        await page.waitForLoadState("networkidle");
+        vaFiltrato = true;
       } else {
         console.log('   [attenzione] Nessun dropdown "Commissioni Assistenza" trovato su questa pagina: proseguo senza toccarlo.');
+      }
+
+      // IMPORTANTE (bug scoperto il 11/07/2026): la pagina Piano di Carico ha
+      // di default un filtro data "Dalla Data Commissione" / "Alla Data
+      // Commissione" impostato dal gestionale su un intervallo ristretto
+      // (es. 01/01/2025 - 31/12/2026): senza azzerarlo, l'export CSV esclude
+      // TUTTO l'arretrato di commissioni piu' vecchie ancora aperte (es. una
+      // commissione del 2021 ancora "da consegnare" vista su Vamart), che
+      // quindi non vengono mai importate come pratiche di consegna. Allarghiamo
+      // qui l'intervallo a tutto lo storico possibile prima di esportare.
+      console.log('   Allargo il filtro data "Dalla/Alla Data Commissione" a tutto lo storico (evita di escludere l\'arretrato)...');
+      const campoDaData = locatorCampoData(page, "Dalla Data Commissione");
+      const campoAData = locatorCampoData(page, "Alla Data Commissione");
+      if (await campoDaData.count() > 0) {
+        await campoDaData.fill("01/01/2000");
+        vaFiltrato = true;
+      } else {
+        console.log('   [attenzione] Campo "Dalla Data Commissione" non trovato: proseguo senza toccarlo.');
+      }
+      if (await campoAData.count() > 0) {
+        await campoAData.fill("31/12/2099");
+        vaFiltrato = true;
+      } else {
+        console.log('   [attenzione] Campo "Alla Data Commissione" non trovato: proseguo senza toccarlo.');
+      }
+
+      if (vaFiltrato) {
+        await page.getByRole("button", { name: "Filtra" }).click();
+        await page.waitForLoadState("networkidle");
       }
       await debugScreenshot(page, "piano-dopo-filtro");
 
