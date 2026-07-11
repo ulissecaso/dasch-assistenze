@@ -46,6 +46,7 @@ export default async function MonitorDirezionePubblico({
         // Schermo pubblico senza login: nessun link verso il resto del
         // portale (vedi commento in cima a questo file).
         righeCliccabili={false}
+        variante="assistenza"
       />
     </div>
   );
