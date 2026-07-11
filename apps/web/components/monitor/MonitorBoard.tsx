@@ -228,10 +228,10 @@ const CSS = `
 .mon-wrap:fullscreen{overflow:auto;padding:22px 28px;}
 .monitor-board{position:relative;background:#0a0e16;color:#e5e7eb;padding:14px 22px;border-radius:16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
   display:flex;flex-direction:column;height:100%;box-sizing:border-box;overflow:hidden;}
-.mon-accento-bar{position:absolute;top:0;left:0;right:0;height:4px;background:var(--accento);border-radius:16px 16px 0 0;}
-.mon-titolo-block{display:flex;align-items:center;gap:11px;}
-.mon-modulo-badge{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 0 12px 1px var(--accento);}
-.mon-modulo-badge .ic{width:21px;height:21px;color:#fff;}
+.mon-accento-bar{position:absolute;top:0;left:0;right:0;height:6px;background:var(--accento);border-radius:16px 16px 0 0;}
+.mon-titolo-block{display:flex;align-items:center;gap:13px;}
+.mon-modulo-badge{width:54px;height:54px;border-radius:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 0 14px 2px var(--accento);}
+.mon-modulo-badge .ic{width:31px;height:31px;color:#fff;}
 .mon-topbar{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;}
 .mon-exit{background:#1a2130;color:#9ca3af;border:1px solid #2a3242;border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;flex-shrink:0;}
 .mon-title-center{flex:1 1 auto;display:flex;align-items:baseline;justify-content:center;gap:14px;flex-wrap:wrap;}
@@ -240,18 +240,18 @@ const CSS = `
 .mon-time-inline{font-size:13px;color:#9ca3af;white-space:nowrap;}
 .mon-header{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:8px;flex-wrap:wrap;}
 .mon-header h1{color:#fff;font-size:24px;line-height:1.1;letter-spacing:.3px;margin:0;text-align:right;}
-.op-row{display:flex;flex-wrap:wrap;gap:8px;}
-.op-card{width:180px;border-radius:10px;padding:6px 10px;background:#0f1420;border:1.5px solid;}
-.op-card-top{display:flex;align-items:center;gap:8px;margin-bottom:3px;}
-.op-card .op-name{font-weight:700;font-size:13.5px;color:#fff;line-height:1.15;}
-.op-card .op-role{font-size:11px;color:#9ca3af;}
-.op-avatar{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-.op-avatar .ic{width:17px;height:17px;color:#fff;}
-.op-card-bottom{display:flex;align-items:center;justify-content:space-between;}
-.op-count-block{display:flex;flex-direction:column;align-items:flex-start;line-height:1;}
-.op-count{font-size:23px;font-weight:800;color:#fff;line-height:1;}
-.op-count-label{font-size:10.5px;color:#9ca3af;letter-spacing:.5px;margin-top:2px;}
-.op-urgent{font-size:13px;font-weight:800;white-space:nowrap;}
+.op-row{display:flex;flex-wrap:wrap;gap:12px;}
+.op-card{width:auto;min-width:200px;border-radius:10px;padding:7px 14px;background:#0f1420;border:1.5px solid;}
+.op-card-top{display:flex;align-items:center;gap:9px;margin-bottom:3px;}
+.op-card .op-name{font-weight:700;font-size:15px;color:#fff;line-height:1.15;white-space:nowrap;}
+.op-card .op-role{font-size:12px;color:#9ca3af;white-space:nowrap;}
+.op-avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.op-avatar .ic{width:19px;height:19px;color:#fff;}
+.op-card-bottom{display:flex;align-items:center;justify-content:space-between;gap:14px;}
+.op-count-block{display:flex;flex-direction:column;align-items:flex-start;line-height:1;white-space:nowrap;}
+.op-count{font-size:26px;font-weight:800;color:#fff;line-height:1;}
+.op-count-label{font-size:11px;color:#9ca3af;letter-spacing:.5px;margin-top:2px;}
+.op-urgent{font-size:14px;font-weight:800;white-space:nowrap;}
 .mon-filter{background:#131a26;border:1px solid #2a3242;color:#cbd5e1;border-radius:8px;padding:5px 9px;font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0;}
 .mon-filter .ic{width:13px;height:13px;color:#cbd5e1;}
 .mon-table-wrap{flex:1 1 auto;min-height:0;background:#0f1420;border:1px solid #1e2634;border-radius:12px;overflow:auto;margin-bottom:10px;}
