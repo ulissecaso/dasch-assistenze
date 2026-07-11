@@ -42,6 +42,7 @@ export default async function MonitorConsegnePubblico({
         righeMax={11}
         messaggioVuoto="Nessun alert al momento: tutte le consegne sono in linea con le scadenze."
         righeCliccabili={false}
+        variante="consegna"
       />
     </div>
   );
