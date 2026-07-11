@@ -133,3 +133,110 @@ async function scaricaCsv() {
       const percorsoCommissioni = path.join(CARTELLA_DOWNLOAD, nomeFileCommissioni);
       await downloadCommissioni.saveAs(percorsoCommissioni);
       renameSync(percorsoCommissioni, path.join(CARTELLA_DOWNLOAD, "ultimo.csv"));
+      risultato.percorsoCommissioni = percorsoCommissioni;
+      console.log(`   OK: CSV commissioni di assistenza scaricato: ${percorsoCommissioni}`);
+    } catch (err) {
+      await debugScreenshot(page, "ERRORE-commissioni");
+      console.error(`   ERRORE nella fase Commissioni: ${err.message}`);
+      throw err; // senza le commissioni non ha senso proseguire: e' il primo file della pipeline
+    }
+
+    // ── 3. PIANO DI CARICO (stessa sessione) ────────────────────────────
+    try {
+      console.log("3. Navigazione alla pagina Piano di Carico...");
+      await page.goto(VAMART_URL_PIANO_DI_CARICO, { waitUntil: "networkidle" });
+      console.log(`   Pagina attuale: ${page.url()}`);
+      await debugScreenshot(page, "piano-prima-filtro");
+
+      // IMPORTANTE: questa pagina condivide lo stesso filtro "Commissioni
+      // Assistenza" della pagina Commissioni. Nella stessa sessione browser
+      // resta impostato su "Solo di assistenza" se non lo azzeriamo qui:
+      // il Piano di Carico deve invece contenere TUTTE le commissioni.
+      console.log('   Reimposto filtro "Commissioni Assistenza" = "Tutti" (evita di ereditare il filtro della pagina Commissioni)...');
+      const filtroPiano = locatorFiltroAssistenza(page);
+      let vaFiltrato = false;
+      if (await filtroPiano.count() > 0) {
+        await filtroPiano.selectOption({ label: "Tutti" });
+        vaFiltrato = true;
+      } else {
+        console.log('   [attenzione] Nessun dropdown "Commissioni Assistenza" trovato su questa pagina: proseguo senza toccarlo.');
+      }
+
+      // IMPORTANTE (bug scoperto il 11/07/2026): la pagina Piano di Carico ha
+      // di default un filtro data "Dalla Data Commissione" / "Alla Data
+      // Commissione" impostato dal gestionale su un intervallo ristretto
+      // (es. 01/01/2025 - 31/12/2026): senza azzerarlo, l'export CSV esclude
+      // TUTTO l'arretrato di commissioni piu' vecchie ancora aperte (es. una
+      // commissione del 2021 ancora "da consegnare" vista su Vamart), che
+      // quindi non vengono mai importate come pratiche di consegna. Allarghiamo
+      // qui l'intervallo a tutto lo storico possibile prima di esportare.
+      console.log('   Allargo il filtro data "Dalla/Alla Data Commissione" a tutto lo storico (evita di escludere l\'arretrato)...');
+      const campoDaData = await locatorCampoData(page, "Dalla Data Commissione");
+      const campoAData = await locatorCampoData(page, "Alla Data Commissione");
+      if (await campoDaData.count() > 0) {
+        await campoDaData.fill("01/01/2000");
+        const valoreLetto = await campoDaData.inputValue().catch(() => "(non leggibile)");
+        console.log(`   [verifica] "Dalla Data Commissione" ora contiene: "${valoreLetto}"`);
+        vaFiltrato = true;
+      } else {
+        console.log('   [attenzione] Campo "Dalla Data Commissione" non trovato: proseguo senza toccarlo.');
+      }
+      if (await campoAData.count() > 0) {
+        await campoAData.fill("31/12/2099");
+        const valoreLetto = await campoAData.inputValue().catch(() => "(non leggibile)");
+        console.log(`   [verifica] "Alla Data Commissione" ora contiene: "${valoreLetto}"`);
+        vaFiltrato = true;
+      } else {
+        console.log('   [attenzione] Campo "Alla Data Commissione" non trovato: proseguo senza toccarlo.');
+      }
+
+      if (vaFiltrato) {
+        await page.getByRole("button", { name: "Filtra" }).click();
+        // Con l'intervallo di date allargato a tutto lo storico, questa
+        // pagina puo' restituire MOLTE piu' righe di prima (anni di
+        // arretrato invece di 2 anni): "networkidle" puo' impiegare piu' dei
+        // 30s di default, quindi allunghiamo il timeout. Se anche cosi'
+        // scade, non blocchiamo tutto: proseguiamo comunque (la tabella e'
+        // di solito gia' visibile anche se qualche richiesta di sfondo non
+        // e' ancora finita) e lasciamo che sia il timeout del download CSV
+        // piu' sotto (90s) a intercettare un vero problema.
+        try {
+          await page.waitForLoadState("networkidle", { timeout: 60000 });
+        } catch {
+          console.log('   [attenzione] "networkidle" non raggiunto entro 60s dopo il filtro allargato: proseguo comunque.');
+        }
+      }
+      await debugScreenshot(page, "piano-dopo-filtro");
+
+      console.log('   Click su pulsante "CSV" e attesa download (puo\' richiedere piu\' tempo: file piu\' grande, ora con tutto lo storico)...');
+      const [downloadPiano] = await Promise.all([
+        page.waitForEvent("download", { timeout: 180000 }),
+        page.getByRole("button", { name: "CSV" }).click(),
+      ]);
+
+      const nomeFilePiano = `piano-di-carico-${new Date().toISOString().slice(0, 10)}.csv`;
+      const percorsoPiano = path.join(CARTELLA_DOWNLOAD, nomeFilePiano);
+      await downloadPiano.saveAs(percorsoPiano);
+      renameSync(percorsoPiano, path.join(CARTELLA_DOWNLOAD, "ultimo-piano-di-carico.csv"));
+      risultato.percorsoPiano = percorsoPiano;
+      console.log(`   OK: CSV Piano di Carico scaricato: ${percorsoPiano}`);
+    } catch (err) {
+      await debugScreenshot(page, "ERRORE-piano-di-carico");
+      console.error(`   ERRORE nella fase Piano di Carico: ${err.message}`);
+      throw err;
+    }
+
+    return risultato;
+  } finally {
+    await browser.close();
+  }
+}
+
+scaricaCsv()
+  .then((r) => {
+    console.log("Scraping completato:", r);
+  })
+  .catch((err) => {
+    console.error("Errore fatale durante lo scraping da Vamart:", err);
+    process.exitCode = 1;
+  });
