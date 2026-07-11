@@ -49,7 +49,10 @@ async function debugScreenshot(page, etichetta) {
   contatoreScreenshot += 1;
   const nome = `debug-${String(contatoreScreenshot).padStart(2, "0")}-${etichetta}.png`;
   try {
-    await page.screenshot({ path: path.join(CARTELLA_DOWNLOAD, nome), fullPage: true });
+    // timeout piu' alto del default (30s): con tutto lo storico caricato la
+    // pagina Piano di Carico puo' restare "occupata" a renderizzare la
+    // tabella piu' a lungo del solito.
+    await page.screenshot({ path: path.join(CARTELLA_DOWNLOAD, nome), fullPage: true, timeout: 60000 });
     console.log(`  [debug] screenshot salvato: ${nome} (pagina: ${page.url()})`);
   } catch (err) {
     console.log(`  [debug] impossibile salvare screenshot ${nome}: ${err.message}`);
@@ -211,7 +214,10 @@ async function scaricaCsv() {
       console.log('   Click su pulsante "CSV" e attesa download (puo\' richiedere piu\' tempo: file piu\' grande, ora con tutto lo storico)...');
       const [downloadPiano] = await Promise.all([
         page.waitForEvent("download", { timeout: 180000 }),
-        page.getByRole("button", { name: "CSV" }).click(),
+        // Con tutto lo storico caricato la tabella (DataTables) puo' restare
+        // "occupata" a renderizzare per oltre i 30s di default di Playwright
+        // prima che il pulsante risulti davvero cliccabile: timeout piu' alto.
+        page.getByRole("button", { name: "CSV" }).click({ timeout: 120000 }),
       ]);
 
       const nomeFilePiano = `piano-di-carico-${new Date().toISOString().slice(0, 10)}.csv`;
