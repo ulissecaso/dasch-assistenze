@@ -16,6 +16,7 @@ type RegolaFase = {
   nome: string;
   codice: string;
   ordine: number;
+  tipoPratica: string;
   primo?: any;
   secondo?: any;
   periodico?: any;
@@ -32,6 +33,7 @@ function raggruppaPerFase(regoleAlert: any[]): RegolaFase[] {
         nome: r.fasi_workflow?.nome ?? "Fase sconosciuta",
         codice: r.fasi_workflow?.codice ?? "",
         ordine: r.fasi_workflow?.ordine ?? 0,
+        tipoPratica: r.fasi_workflow?.tipo_pratica ?? "assistenza",
       });
     }
     (gruppi.get(r.fase_id) as any)[r.step] = r;
@@ -96,7 +98,7 @@ export default async function AdminPage({
   ] = await Promise.all([
     supabase.from("utenti").select("*").order("cognome"),
     supabase.from("regole_assegnazione").select("*, utenti(nome, cognome)").order("priorita"),
-    supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine)").eq("attiva", true),
+    supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine, tipo_pratica)").eq("attiva", true),
     supabase.from("importazioni_csv").select("*").order("iniziata_il", { ascending: false }).limit(20),
     queryPratiche,
   ]);
@@ -110,7 +112,12 @@ export default async function AdminPage({
   ].filter(Boolean) as string[];
 
   const fasiConfigurabili = raggruppaPerFase(regoleAlert ?? []);
+  const fasiAssistenza = fasiConfigurabili.filter((f) => f.tipoPratica === "assistenza");
+  const fasiConsegna = fasiConfigurabili.filter((f) => f.tipoPratica === "consegna");
   const regoleGeneriche = (regoleAlert ?? []).filter((r: any) => !r.fase_id);
+
+  const regoleAssistenza = (regoleAssegnazione ?? []).filter((r: any) => (r.tipo_pratica ?? "assistenza") === "assistenza");
+  const regoleConsegna = (regoleAssegnazione ?? []).filter((r: any) => r.tipo_pratica === "consegna");
 
   return (
     <main className="p-6 space-y-8">
@@ -127,42 +134,14 @@ export default async function AdminPage({
 
       <section className="bg-white rounded-xl shadow p-4">
         <h2 className="text-lg font-medium mb-3">Regole di assegnazione</h2>
-        <table className="w-full text-sm mb-4">
-          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Tipo</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
-          <tbody>
-            {(regoleAssegnazione ?? []).map((r: any) => (
-              <tr key={r.id} className="border-t">
-                <td className="py-1">{r.nome}</td>
-                <td className="capitalize">{r.tipo_pratica ?? "assistenza"}</td>
-                <td>{r.criterio}</td>
-                <td>{r.valore_da} - {r.valore_a}</td>
-                <td>{r.utenti?.nome} {r.utenti?.cognome}</td>
-                <td>{r.priorita}</td>
-                <td>{r.attiva ? "Sì" : "No"}</td>
-                <td className="flex gap-3 py-1">
-                  <form action={alternaAttivaRegola}>
-                    <input type="hidden" name="id" value={r.id} />
-                    <input type="hidden" name="nuovo_stato" value={(!r.attiva).toString()} />
-                    <button type="submit" className="text-xs underline text-gray-500">
-                      {r.attiva ? "Disattiva" : "Riattiva"}
-                    </button>
-                  </form>
-                  <form action={eliminaRegolaAssegnazione}>
-                    <input type="hidden" name="id" value={r.id} />
-                    <button type="submit" className="text-xs underline text-red-600">
-                      Elimina
-                    </button>
-                  </form>
-                </td>
-              </tr>
-            ))}
-            {(regoleAssegnazione ?? []).length === 0 && (
-              <tr><td colSpan={8} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
-            )}
-          </tbody>
-        </table>
 
-        <details className="text-sm">
+        <h3 className="text-sm font-semibold text-gray-700 mb-2">Assistenza</h3>
+        <TabellaRegole regole={regoleAssistenza} />
+
+        <h3 className="text-sm font-semibold text-gray-700 mt-6 mb-2">Consegna</h3>
+        <TabellaRegole regole={regoleConsegna} />
+
+        <details className="text-sm mt-4">
           <summary className="cursor-pointer text-gray-600 font-medium">+ Aggiungi regola di assegnazione</summary>
           <form action={creaRegolaAssegnazione} className="mt-3 grid gap-3 md:grid-cols-6 items-end max-w-3xl">
             <label className="md:col-span-2">
@@ -215,59 +194,11 @@ export default async function AdminPage({
           poi solleciti ripetuti (Periodico) fino a un tetto, dopo il quale scatta l&apos;escalation
           automatica ai responsabili/admin. I valori valgono per tutte le pratiche, non per la singola pratica.
         </p>
-        <div className="grid gap-4 md:grid-cols-2">
-          {fasiConfigurabili.map((fase) => (
-            <form
-              key={fase.fase_id}
-              action={aggiornaRegoleFase}
-              className="border rounded-lg p-4 space-y-3"
-            >
-              <input type="hidden" name="primo_id" value={fase.primo.id} />
-              <input type="hidden" name="secondo_id" value={fase.secondo.id} />
-              <input type="hidden" name="periodico_id" value={fase.periodico.id} />
+        <h3 className="text-sm font-semibold text-gray-700 mb-2">Assistenza</h3>
+        <GrigliaSoglie fasi={fasiAssistenza} />
 
-              <h3 className="font-semibold text-gray-800">{fase.nome}</h3>
-
-              <CampoDurata
-                label="Primo Allert (preavviso)"
-                nomeGiorni="primo_giorni"
-                nomeOre="primo_ore"
-                valore={separaGiorniOre(fase.primo.soglia_valore, fase.primo.soglia_unita)}
-              />
-              <CampoDurata
-                label="Secondo Allert (soglia)"
-                nomeGiorni="secondo_giorni"
-                nomeOre="secondo_ore"
-                valore={separaGiorniOre(fase.secondo.soglia_valore, fase.secondo.soglia_unita)}
-              />
-              <CampoDurata
-                label="Ripeti ogni (allert periodico)"
-                nomeGiorni="intervallo_giorni"
-                nomeOre="intervallo_ore"
-                valore={separaGiorniOre(fase.periodico.ripeti_ogni_valore, fase.periodico.ripeti_ogni_unita)}
-              />
-              <label className="block text-sm">
-                <span className="text-gray-600">Numero massimo di solleciti prima dell&apos;escalation</span>
-                <input
-                  type="number"
-                  min={1}
-                  name="tetto"
-                  defaultValue={fase.periodico.ripeti_max_volte ?? 3}
-                  className="mt-1 w-24 border rounded px-2 py-1"
-                />
-              </label>
-              {fase.escalation && (
-                <p className="text-xs text-gray-400">
-                  Dopo il tetto: <span className="font-medium">{fase.escalation.nome}</span> (notifica {fase.escalation.destinatari_ruolo?.join(", ")})
-                </p>
-              )}
-
-              <button type="submit" className="mt-2 bg-gray-900 text-white text-sm rounded px-3 py-1.5">
-                Salva soglie
-              </button>
-            </form>
-          ))}
-        </div>
+        <h3 className="text-sm font-semibold text-gray-700 mt-6 mb-2">Consegna</h3>
+        <GrigliaSoglie fasi={fasiConsegna} />
 
         {regoleGeneriche.length > 0 && (
           <div className="mt-6">
@@ -514,6 +445,112 @@ export default async function AdminPage({
         </div>
       </section>
     </main>
+  );
+}
+
+/** Tabella "Regole di assegnazione" per un solo tipo_pratica (assistenza o
+ *  consegna): estratta per evitare di ripetere due volte lo stesso markup
+ *  nella pagina, ora che le regole sono raggruppate per tipo invece che
+ *  mostrate tutte insieme con una colonna "Tipo". */
+function TabellaRegole({ regole }: { regole: any[] }) {
+  return (
+    <table className="w-full text-sm mb-4">
+      <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
+      <tbody>
+        {regole.map((r: any) => (
+          <tr key={r.id} className="border-t">
+            <td className="py-1">{r.nome}</td>
+            <td>{r.criterio}</td>
+            <td>{r.valore_da} - {r.valore_a}</td>
+            <td>{r.utenti?.nome} {r.utenti?.cognome}</td>
+            <td>{r.priorita}</td>
+            <td>{r.attiva ? "Sì" : "No"}</td>
+            <td className="flex gap-3 py-1">
+              <form action={alternaAttivaRegola}>
+                <input type="hidden" name="id" value={r.id} />
+                <input type="hidden" name="nuovo_stato" value={(!r.attiva).toString()} />
+                <button type="submit" className="text-xs underline text-gray-500">
+                  {r.attiva ? "Disattiva" : "Riattiva"}
+                </button>
+              </form>
+              <form action={eliminaRegolaAssegnazione}>
+                <input type="hidden" name="id" value={r.id} />
+                <button type="submit" className="text-xs underline text-red-600">
+                  Elimina
+                </button>
+              </form>
+            </td>
+          </tr>
+        ))}
+        {regole.length === 0 && (
+          <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+/** Griglia "Soglie SLA per fase" per un solo tipo_pratica: stessa estrazione
+ *  di TabellaRegole, per lo stesso motivo (raggruppamento assistenza/consegna
+ *  invece di un'unica griglia mista). */
+function GrigliaSoglie({ fasi }: { fasi: RegolaFase[] }) {
+  if (fasi.length === 0) {
+    return <p className="text-sm text-gray-400 mb-4">Nessuna fase configurata per questo tipo.</p>;
+  }
+  return (
+    <div className="grid gap-4 md:grid-cols-2 mb-4">
+      {fasi.map((fase) => (
+        <form
+          key={fase.fase_id}
+          action={aggiornaRegoleFase}
+          className="border rounded-lg p-4 space-y-3"
+        >
+          <input type="hidden" name="primo_id" value={fase.primo.id} />
+          <input type="hidden" name="secondo_id" value={fase.secondo.id} />
+          <input type="hidden" name="periodico_id" value={fase.periodico.id} />
+
+          <h3 className="font-semibold text-gray-800">{fase.nome}</h3>
+
+          <CampoDurata
+            label="Primo Allert (preavviso)"
+            nomeGiorni="primo_giorni"
+            nomeOre="primo_ore"
+            valore={separaGiorniOre(fase.primo.soglia_valore, fase.primo.soglia_unita)}
+          />
+          <CampoDurata
+            label="Secondo Allert (soglia)"
+            nomeGiorni="secondo_giorni"
+            nomeOre="secondo_ore"
+            valore={separaGiorniOre(fase.secondo.soglia_valore, fase.secondo.soglia_unita)}
+          />
+          <CampoDurata
+            label="Ripeti ogni (allert periodico)"
+            nomeGiorni="intervallo_giorni"
+            nomeOre="intervallo_ore"
+            valore={separaGiorniOre(fase.periodico.ripeti_ogni_valore, fase.periodico.ripeti_ogni_unita)}
+          />
+          <label className="block text-sm">
+            <span className="text-gray-600">Numero massimo di solleciti prima dell&apos;escalation</span>
+            <input
+              type="number"
+              min={1}
+              name="tetto"
+              defaultValue={fase.periodico.ripeti_max_volte ?? 3}
+              className="mt-1 w-24 border rounded px-2 py-1"
+            />
+          </label>
+          {fase.escalation && (
+            <p className="text-xs text-gray-400">
+              Dopo il tetto: <span className="font-medium">{fase.escalation.nome}</span> (notifica {fase.escalation.destinatari_ruolo?.join(", ")})
+            </p>
+          )}
+
+          <button type="submit" className="mt-2 bg-gray-900 text-white text-sm rounded px-3 py-1.5">
+            Salva soglie
+          </button>
+        </form>
+      ))}
+    </div>
   );
 }
 
