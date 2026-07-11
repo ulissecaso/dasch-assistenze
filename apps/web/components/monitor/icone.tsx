@@ -6,7 +6,7 @@
 
 type NomeIcona =
   | "person" | "person-sm" | "warning" | "warn-sm" | "filter" | "box" | "doc"
-  | "cart" | "truck" | "check" | "bell" | "clock" | "alert-circle" | "check-circle" | "calendar";
+  | "cart" | "truck" | "check" | "bell" | "clock" | "alert-circle" | "check-circle" | "calendar" | "headset";
 
 const PATH: Record<NomeIcona, JSX.Element> = {
   person: <><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" /></>,
@@ -24,6 +24,7 @@ const PATH: Record<NomeIcona, JSX.Element> = {
   "alert-circle": <><circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" /></>,
   "check-circle": <><path d="M21.8 10A10 10 0 1 1 17 3.3" /><path d="m9 11 3 3L22 4" /></>,
   calendar: <><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4" /><path d="M8 2v4" /><path d="M3 10h18" /></>,
+  headset: <><path d="M3 14v-2a9 9 0 0 1 18 0v2" /><path d="M21 15a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3v5Z" /><path d="M3 15a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3v5Z" /><path d="M21 17v1a4 4 0 0 1-4 4h-2" /></>,
 };
 
 export function Icona({ nome, className }: { nome: NomeIcona; className?: string }) {
