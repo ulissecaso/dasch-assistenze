@@ -155,7 +155,16 @@ export default async function DashboardOperatorePage() {
       };
     });
 
-  const alertRows: AlertRigaMonitor[] = [...alertRowsFasi, ...alertRowsParzialiConsegna];
+  // Riordina l'unione fasi+avvisi-parziali per priorita' vera (critica in
+  // cima, bassa in fondo): alertRowsFasi era gia' ordinato da solo, ma la
+  // semplice concatenazione con alertRowsParzialiConsegna (sempre "media")
+  // rompeva l'ordine complessivo, es. mostrando "bassa" sopra "media".
+  const alertRows: AlertRigaMonitor[] = [...alertRowsFasi, ...alertRowsParzialiConsegna].sort((a, b) => {
+    const rangoA = RANGO_LIVELLO[a.livello as keyof typeof RANGO_LIVELLO];
+    const rangoB = RANGO_LIVELLO[b.livello as keyof typeof RANGO_LIVELLO];
+    if (rangoA !== rangoB) return rangoA - rangoB;
+    return `${a.scadenzaData} ${a.scadenzaOra}`.localeCompare(`${b.scadenzaData} ${b.scadenzaOra}`);
+  });
 
   const operatori: OperatoreCardMonitor[] = [{
     id: user.id,
