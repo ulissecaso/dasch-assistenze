@@ -6,7 +6,7 @@
 // solo nei dati passati come props dalla pagina server, non nel componente.
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Icona } from "./icone";
 
@@ -73,10 +73,25 @@ export default function MonitorBoard({
   righeMax?: number;
   righeCliccabili?: boolean;
 }) {
+  const [ora, setOra] = useState<{ data: string; clock: string }>({ data: "", clock: "" });
   const [kiosk, setKiosk] = useState(false);
   const [soloUrgenti, setSoloUrgenti] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    const mesi = ["GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO", "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"];
+    const tick = () => {
+      const now = new Date();
+      setOra({
+        data: `${now.getDate()} ${mesi[now.getMonth()]} ${now.getFullYear()}`,
+        clock: now.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
+      });
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   async function toggleKiosk() {
     try {
@@ -106,6 +121,7 @@ export default function MonitorBoard({
           ) : <span />}
           <div className="mon-title-center">
             <span className="left"><Icona nome="warning" className="ic" /> ALERT CON SCADENZA PIÙ IMMINENTE</span>
+            <span className="mon-time-inline">{ora.data} · {ora.clock}</span>
           </div>
           <div className="mon-filter" onClick={() => setSoloUrgenti((v) => !v)}>
             <Icona nome="filter" className="ic" /> {soloUrgenti ? "Mostra tutti" : "Mostra solo urgenti"}
@@ -162,7 +178,7 @@ export default function MonitorBoard({
                   >
                     <td><Icona nome="warn-sm" className={`ic ic-${r.livello === "critica" ? "red" : r.livello === "alta" ? "orange" : r.livello === "media" ? "yellow" : "green"}`} /></td>
                     <td><span className={`mon-badge ${r.livello}`}>{r.livello.toUpperCase()}</span></td>
-                    <td>{r.scadenzaData}<br />{r.scadenzaOra}</td>
+                    <td>{r.scadenzaData}</td>
                     <td>{r.praticaCodice}</td>
                     <td>{r.cliente}</td>
                     <td><div className="fase-cell"><Icona nome={r.faseIcona as any} className="ic" /> {r.faseNome}</div></td>
@@ -198,6 +214,7 @@ const CSS = `
 .mon-title-center{flex:1 1 auto;display:flex;align-items:baseline;justify-content:center;gap:14px;flex-wrap:wrap;}
 .mon-title-center .left{display:flex;align-items:center;gap:7px;color:#f87171;font-weight:700;font-size:15.5px;letter-spacing:.3px;white-space:nowrap;}
 .mon-title-center .left .ic{width:21px;height:21px;color:#f87171;}
+.mon-time-inline{font-size:13px;color:#9ca3af;white-space:nowrap;}
 .mon-header{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:8px;flex-wrap:wrap;}
 .mon-header h1{color:#fff;font-size:24px;line-height:1.1;letter-spacing:.3px;margin:0;text-align:right;}
 .op-row{display:flex;flex-wrap:wrap;gap:8px;}
