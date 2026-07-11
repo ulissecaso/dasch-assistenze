@@ -171,13 +171,23 @@ async function scaricaCsv() {
       // (es. 01/01/2025 - 31/12/2026): senza azzerarlo, l'export CSV esclude
       // TUTTO l'arretrato di commissioni piu' vecchie ancora aperte (es. una
       // commissione del 2021 ancora "da consegnare" vista su Vamart), che
-      // quindi non vengono mai importate come pratiche di consegna. Allarghiamo
-      // qui l'intervallo a tutto lo storico possibile prima di esportare.
-      console.log('   Allargo il filtro data "Dalla/Alla Data Commissione" a tutto lo storico (evita di escludere l\'arretrato)...');
+      // quindi non vengono mai importate come pratiche di consegna.
+      //
+      // NON allarghiamo pero' a TUTTO lo storico: verificato a mano che con
+      // "Dalla Data Commissione" = 01/01/2018 (23.791 righe) la pagina di
+      // Vamart stessa smette di rispondere (nessuna paginazione lato
+      // server), mentre con 01/01/2024 (10.124 righe) carica normalmente.
+      // Usiamo quindi 01/01/2024 come compromesso sicuro per l'automazione
+      // oraria: copre 3 anni invece di 2, senza rischiare di bloccare la
+      // pagina. L'arretrato piu' vecchio (2021-2023) va importato a parte,
+      // una tantum, con un file scaricato a mano e caricato dal pannello
+      // admin ("Importa CSV"): non conviene rischiare di bloccare Vamart
+      // ogni ora solo per intercettare quelle poche pratiche molto vecchie.
+      console.log('   Allargo il filtro data "Dalla Data Commissione" al 01/01/2024 (evita di escludere l\'arretrato 2024-oggi, senza sovraccaricare la pagina)...');
       const campoDaData = await locatorCampoData(page, "Dalla Data Commissione");
       const campoAData = await locatorCampoData(page, "Alla Data Commissione");
       if (await campoDaData.count() > 0) {
-        await campoDaData.fill("01/01/2000");
+        await campoDaData.fill("01/01/2024");
         const valoreLetto = await campoDaData.inputValue().catch(() => "(non leggibile)");
         console.log(`   [verifica] "Dalla Data Commissione" ora contiene: "${valoreLetto}"`);
         vaFiltrato = true;
