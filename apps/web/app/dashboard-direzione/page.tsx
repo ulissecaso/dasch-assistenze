@@ -21,6 +21,7 @@ export default async function DashboardDirezionePage() {
         alertRows={alertRows}
         stats={stats}
         righeMax={11}
+        variante="assistenza"
       />
     </div>
   );
