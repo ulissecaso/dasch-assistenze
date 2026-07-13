@@ -40,7 +40,13 @@ export default async function DashboardOperatorePage() {
       .lt("data_prevista", adesso)
       .eq("pratiche.operatore_assegnato_id", user.id)
       .order("data_prevista", { ascending: true })
-      .limit(500),
+      // Era limit(500): con operatori che hanno molte pratiche vecchie
+      // (es. arretrato Cinquegrana), l'ordine "più scaduta prima" tagliava
+      // fuori le pratiche più recenti (es. Master Mobili appena importate,
+      // priorità bassa) che finivano oltre le prime 500. Il commento in
+      // cima al file dice esplicitamente "qui NON limitiamo le righe": 5000
+      // è di fatto un tetto di sicurezza, non un limite operativo reale.
+      .limit(5000),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).not("stato_generale", "in", '("chiusa","annullata")'),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
