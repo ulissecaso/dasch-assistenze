@@ -35,6 +35,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     profilo = data;
   }
   const isAdmin = profilo?.ruolo === "admin" || profilo?.ruolo === "responsabile";
+  // Il supervisore vede le due dashboard di monitoraggio (in sola lettura,
+  // filtrate sul suo brand via RLS - vedi 0013_ruolo_supervisore.sql) come
+  // admin/responsabile, ma non deve avere il link al pannello /admin: non
+  // ha né i permessi né senso pratico (non può modificare nulla) di entrarci.
+  const vedeDirezione = isAdmin || profilo?.ruolo === "supervisore";
 
   return (
     <html lang="it">
@@ -42,13 +47,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <div className="flex min-h-screen">
           <nav className="w-56 bg-white border-r p-4 space-y-2 flex flex-col">
             <p className="font-semibold mb-4">Dasch Assistenze</p>
-            {isAdmin && (
+            {vedeDirezione && (
               <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-direzione">Monitoraggio Assistenze</Link>
             )}
-            {isAdmin && (
+            {vedeDirezione && (
               <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-direzione-consegne">Monitoraggio Consegne</Link>
             )}
-            <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-operatore">Le mie pratiche</Link>
+            {profilo?.ruolo !== "supervisore" && (
+              <Link className="block py-1 text-sm hover:text-blue-600" href="/dashboard-operatore">Le mie pratiche</Link>
+            )}
             {isAdmin && (
               <Link className="block py-1 text-sm hover:text-blue-600" href="/admin">Admin</Link>
             )}
