@@ -24,7 +24,7 @@ export default async function DashboardOperatorePage() {
   const adessoMs = Date.now();
   const oggi = oggiIso();
 
-  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }, { data: brandsAttivi }] = await Promise.all([
+  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
     supabase.from("utenti").select("nome, cognome, colore_badge").eq("id", user.id).maybeSingle(),
     supabase
       .from("pratica_fasi")
@@ -44,16 +44,6 @@ export default async function DashboardOperatorePage() {
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).not("stato_generale", "in", '("chiusa","annullata")'),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
-    // Brand su cui QUESTO operatore è abilitato (non solo quelli con almeno
-    // un alert in ritardo in questo momento): serve per mostrare sempre i
-    // pulsanti di filtro "Tutti i brand / Cinquegrana / Master Mobili" a chi
-    // è abilitato su più di un brand, anche quando in questo istante ha in
-    // ritardo solo pratiche di uno di essi.
-    supabase
-      .from("operatore_brand")
-      .select("brands(codice, nome, colore)")
-      .eq("operatore_id", user.id)
-      .eq("attivo", true),
   ]);
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
@@ -190,10 +180,6 @@ export default async function DashboardOperatorePage() {
   const scaduti = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
   const inScadenzaOggi = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
-  const brandsOperatore = (brandsAttivi ?? [])
-    .map((ob: any) => ob.brands)
-    .filter(Boolean) as { codice: string; nome: string; colore: string }[];
-
   return (
     <div className="h-screen overflow-hidden p-3">
       <MonitorBoard
@@ -211,7 +197,6 @@ export default async function DashboardOperatorePage() {
         messaggioVuoto="Nessuna pratica in ritardo al momento: sei in linea con tutte le scadenze."
         mostraSelettoreSchermoIntero={false}
         righeMax={Math.max(alertRows.length, 1)}
-        brandsAttivi={brandsOperatore}
       />
     </div>
   );
