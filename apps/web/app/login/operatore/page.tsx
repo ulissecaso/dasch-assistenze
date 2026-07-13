@@ -19,16 +19,29 @@ export default function LoginOperatorePage() {
     setErrore(null);
     setCaricamento(true);
     const supabase = creaSupabaseClientBrowser();
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data: sessione, error } = await supabase.auth.signInWithPassword({
       email: emailSinteticaDaCodice(codice),
       password: codice,
     });
-    setCaricamento(false);
     if (error) {
+      setCaricamento(false);
       setErrore("Codice non valido. Controlla di averlo digitato correttamente.");
       return;
     }
-    router.push("/dashboard-operatore");
+    // Il supervisore accede con codice come un operatore, ma deve atterrare
+    // sulla dashboard di monitoraggio (vede tutti gli operatori del suo
+    // brand), non sulla propria "Le mie pratiche" (che per lui è vuota/non
+    // pertinente): controlliamo il ruolo appena ottenuta la sessione.
+    let destinazione = "/dashboard-operatore";
+    const utenteId = sessione?.user?.id;
+    if (utenteId) {
+      const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", utenteId).maybeSingle();
+      if (profilo?.ruolo === "supervisore") {
+        destinazione = "/dashboard-direzione";
+      }
+    }
+    setCaricamento(false);
+    router.push(destinazione);
     router.refresh();
   }
 

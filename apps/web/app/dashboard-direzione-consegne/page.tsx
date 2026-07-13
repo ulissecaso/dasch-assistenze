@@ -1,16 +1,14 @@
 // app/dashboard-direzione-consegne/page.tsx
 // Monitor Consegne — versione autenticata (dentro al portale admin).
 // Per il monitor a parete, senza login, usa /monitor/consegne.
-import { creaSupabaseClientServer } from "@/lib/supabase/server";
-import { richiediAdmin } from "@/lib/auth/richiediUtente";
+import { richiediVisioneDirezione } from "@/lib/auth/richiediUtente";
 import MonitorBoard from "@/components/monitor/MonitorBoard";
 import { caricaDatiConsegne } from "@/lib/monitor/caricaDatiConsegne";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardDirezioneConsegnePage() {
-  await richiediAdmin();
-  const supabase = creaSupabaseClientServer();
+  const { supabase } = await richiediVisioneDirezione();
   const { alertRows, operatori, stats } = await caricaDatiConsegne(supabase);
 
   return (

@@ -18,7 +18,10 @@ export async function richiediUtente() {
   return { supabase, user };
 }
 
-/** Richiede un utente con ruolo admin/responsabile. Reindirizza altrimenti. */
+/** Richiede un utente con ruolo admin/responsabile. Reindirizza altrimenti.
+ *  Usata dal pannello /admin e da tutte le Server Action che modificano
+ *  qualcosa: il ruolo 'supervisore' (sola lettura) non deve mai passare
+ *  questo controllo. */
 export async function richiediAdmin() {
   const supabase = creaSupabaseClientServer();
   const { data, error } = await supabase.auth.getUser();
@@ -29,6 +32,27 @@ export async function richiediAdmin() {
 
   const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", user!.id).maybeSingle();
   if (!profilo || !["admin", "responsabile"].includes(profilo.ruolo)) {
+    redirect("/dashboard-operatore");
+  }
+
+  return { supabase, user: user!, profilo };
+}
+
+/** Richiede un utente con ruolo admin/responsabile/supervisore: usata dalle
+ *  dashboard "Monitoraggio Assistenze" e "Monitoraggio Consegne", che il
+ *  supervisore deve poter vedere (in sola lettura, filtrate sul suo brand
+ *  tramite RLS - vedi 0013_ruolo_supervisore.sql) senza però poter entrare
+ *  nel pannello /admin (quello resta riservato a richiediAdmin sopra). */
+export async function richiediVisioneDirezione() {
+  const supabase = creaSupabaseClientServer();
+  const { data, error } = await supabase.auth.getUser();
+  const user = data?.user ?? null;
+  if (!user || error) {
+    redirect("/login/operatore");
+  }
+
+  const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", user!.id).maybeSingle();
+  if (!profilo || !["admin", "responsabile", "supervisore"].includes(profilo.ruolo)) {
     redirect("/dashboard-operatore");
   }
 
