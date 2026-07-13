@@ -134,6 +134,64 @@ export async function cambiaPasswordAdmin(formData: FormData) {
   revalidatePath("/admin");
 }
 
+/** Elimina DEFINITIVAMENTE un operatore/utente: irreversibile.
+ *
+ *  Doppia protezione (stesso principio di eliminaDefinitivamentePratica in
+ *  pratiche-actions.ts):
+ *   1. Consentita SOLO su utenti già disattivati (va prima disattivato con
+ *      "Disattiva", poi eventualmente eliminato: non si elimina direttamente
+ *      un utente ancora attivo).
+ *   2. Il form che chiama questa azione richiede una checkbox di conferma
+ *      esplicita (vedi app/admin/page.tsx).
+ *
+ *  Prima di cancellare la riga in `utenti` e l'utente Supabase Auth,
+ *  ripuliamo tutti i riferimenti che altrimenti bloccherebbero la DELETE per
+ *  vincolo di chiave esterna o che perderebbero senso restando orfani:
+ *   - operatore_brand: cascade automatico (0011_multi_brand.sql), nessuna
+ *     azione manuale necessaria.
+ *   - regole_assegnazione: operatore_id è NOT NULL, non si può "scollegare",
+ *     quindi le regole di questo operatore vengono eliminate insieme a lui
+ *     (l'admin dovrà ricrearle su un altro operatore se servono ancora).
+ *   - notifiche: utente_id è NOT NULL, eliminate insieme all'utente.
+ *   - pratiche.operatore_assegnato_id, storico_modifiche.modificato_da,
+ *     allegati.caricato_da: colonne nullable, impostate a null così le
+ *     pratiche/storico restano intatti ma "non assegnati".
+ */
+export async function eliminaOperatore(formData: FormData) {
+  const { user } = await richiediAdmin();
+
+  const id = String(formData.get("id") ?? "");
+  const confermato = formData.get("conferma") === "si";
+  if (!id || !confermato) {
+    throw new Error("Conferma mancante: serve spuntare la casella di conferma per eliminare definitivamente.");
+  }
+  if (id === user.id) {
+    throw new Error("Non puoi eliminare il tuo stesso account da qui.");
+  }
+
+  const supabase = creaSupabaseClientAdmin();
+
+  const { data: utente } = await supabase.from("utenti").select("nome, cognome, attivo").eq("id", id).maybeSingle();
+  if (!utente) throw new Error("Utente non trovato");
+  if (utente.attivo) {
+    throw new Error("Si può eliminare definitivamente solo un utente già disattivato. Disattivalo prima, poi elimina.");
+  }
+
+  await supabase.from("pratiche").update({ operatore_assegnato_id: null }).eq("operatore_assegnato_id", id);
+  await supabase.from("storico_modifiche").update({ modificato_da: null }).eq("modificato_da", id);
+  await supabase.from("allegati").update({ caricato_da: null }).eq("caricato_da", id);
+  await supabase.from("regole_assegnazione").delete().eq("operatore_id", id);
+  await supabase.from("notifiche").delete().eq("utente_id", id);
+
+  const { error: erroreAuth } = await supabase.auth.admin.deleteUser(id);
+  if (erroreAuth) throw erroreAuth;
+
+  const { error: erroreUtente } = await supabase.from("utenti").delete().eq("id", id);
+  if (erroreUtente) throw erroreUtente;
+
+  revalidatePath("/admin");
+}
+
 /** Rigenera il codice di accesso di un operatore (equivale a "cambia
  *  password": per gli operatori il codice E' la password, vedi creaOperatore
  *  sopra). Il vecchio codice smette immediatamente di funzionare; il nuovo

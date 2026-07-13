@@ -3,7 +3,7 @@
 import { creaSupabaseClientServer } from "@/lib/supabase/server";
 import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
-import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore } from "./operatori-actions";
+import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore, eliminaOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
 import { alternaAbilitazioneBrand } from "./brand-actions";
 import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratiche-actions";
@@ -427,6 +427,22 @@ export default async function AdminPage({
                         />
                         <button type="submit" className="bg-gray-900 text-white rounded px-2 py-1">
                           Salva
+                        </button>
+                      </form>
+                    </details>
+                  )}
+
+                  {!u.attivo && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-red-800">Elimina definitivamente</summary>
+                      <form action={eliminaOperatore} className="mt-1 flex flex-col items-start gap-1">
+                        <input type="hidden" name="id" value={u.id} />
+                        <label className="flex items-center gap-1 text-xs text-red-800">
+                          <input type="checkbox" name="conferma" value="si" required />
+                          Confermo: cancella per sempre {u.nome} {u.cognome}, non recuperabile
+                        </label>
+                        <button type="submit" className="bg-red-800 text-white text-xs rounded px-2 py-1">
+                          Elimina DEFINITIVAMENTE
                         </button>
                       </form>
                     </details>
