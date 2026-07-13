@@ -5,6 +5,7 @@ import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
+import { alternaAbilitazioneBrand } from "./brand-actions";
 import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratiche-actions";
 import UploadCsvForm from "@/components/admin/UploadCsvForm";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
@@ -95,12 +96,16 @@ export default async function AdminPage({
     { data: regoleAlert, error: erroreRegoleAlert },
     { data: importazioni, error: erroreImportazioni },
     { data: pratiche, error: errorePratiche },
+    { data: brands, error: erroreBrands },
+    { data: operatoreBrand, error: erroreOperatoreBrand },
   ] = await Promise.all([
     supabase.from("utenti").select("*").order("cognome"),
     supabase.from("regole_assegnazione").select("*, utenti(nome, cognome)").order("priorita"),
     supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine, tipo_pratica)").eq("attiva", true),
     supabase.from("importazioni_csv").select("*").order("iniziata_il", { ascending: false }).limit(20),
     queryPratiche,
+    supabase.from("brands").select("*").order("nome"),
+    supabase.from("operatore_brand").select("operatore_id, brand_id, attivo"),
   ]);
 
   const erroriQuery = [
@@ -109,7 +114,18 @@ export default async function AdminPage({
     erroreRegoleAlert && `regole_alert: ${erroreRegoleAlert.message}`,
     erroreImportazioni && `importazioni_csv: ${erroreImportazioni.message}`,
     errorePratiche && `pratiche: ${errorePratiche.message}`,
+    erroreBrands && `brands: ${erroreBrands.message}`,
+    erroreOperatoreBrand && `operatore_brand: ${erroreOperatoreBrand.message}`,
   ].filter(Boolean) as string[];
+
+  // Set di brand_id abilitati per ciascun operatore, per rendere velocemente
+  // lo stato dei pulsanti nella tabella "Operatori e utenti" sotto.
+  const brandAbilitatiPerOperatore = new Map<string, Set<string>>();
+  for (const ob of operatoreBrand ?? []) {
+    if (!ob.attivo) continue;
+    if (!brandAbilitatiPerOperatore.has(ob.operatore_id)) brandAbilitatiPerOperatore.set(ob.operatore_id, new Set());
+    brandAbilitatiPerOperatore.get(ob.operatore_id)!.add(ob.brand_id);
+  }
 
   const fasiConfigurabili = raggruppaPerFase(regoleAlert ?? []);
   const fasiAssistenza = fasiConfigurabili.filter((f) => f.tipoPratica === "assistenza");
@@ -324,7 +340,7 @@ export default async function AdminPage({
       <section className="bg-white rounded-xl shadow p-4">
         <h2 className="text-lg font-medium mb-3">Operatori e utenti</h2>
         <table className="w-full text-sm mb-4">
-          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Ruolo</th><th>Accesso</th><th>Attivo</th><th></th></tr></thead>
+          <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Ruolo</th><th>Accesso</th><th>Attivo</th><th>Brand abilitati</th><th></th></tr></thead>
           <tbody>
             {(operatori ?? []).map((u: any) => (
               <tr key={u.id} className="border-t">
@@ -341,6 +357,32 @@ export default async function AdminPage({
                   )}
                 </td>
                 <td>{u.attivo ? "Sì" : "No"}</td>
+                <td className="py-1">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(brands ?? []).map((b: any) => {
+                      const abilitato = brandAbilitatiPerOperatore.get(u.id)?.has(b.id) ?? false;
+                      return (
+                        <form key={b.id} action={alternaAbilitazioneBrand}>
+                          <input type="hidden" name="operatore_id" value={u.id} />
+                          <input type="hidden" name="brand_id" value={b.id} />
+                          <input type="hidden" name="nuovo_stato" value={(!abilitato).toString()} />
+                          <button
+                            type="submit"
+                            title={abilitato ? `Disabilita su ${b.nome}` : `Abilita su ${b.nome}`}
+                            className="text-[11px] font-medium rounded-full px-2 py-0.5 border"
+                            style={
+                              abilitato
+                                ? { background: b.colore, borderColor: b.colore, color: "#fff" }
+                                : { color: b.colore, borderColor: b.colore, background: "transparent", opacity: 0.55 }
+                            }
+                          >
+                            {b.nome}
+                          </button>
+                        </form>
+                      );
+                    })}
+                  </div>
+                </td>
                 <td className="flex flex-wrap items-start gap-3 py-1">
                   <form action={alternaAttivoUtente}>
                     <input type="hidden" name="id" value={u.id} />
@@ -384,7 +426,7 @@ export default async function AdminPage({
               </tr>
             ))}
             {(operatori ?? []).length === 0 && (
-              <tr><td colSpan={5} className="py-2 text-gray-400">Nessun utente creato ancora.</td></tr>
+              <tr><td colSpan={6} className="py-2 text-gray-400">Nessun utente creato ancora.</td></tr>
             )}
           </tbody>
         </table>
@@ -520,78 +562,4 @@ function GrigliaSoglie({ fasi }: { fasi: RegolaFase[] }) {
           <CampoDurata
             label="Secondo Allert (soglia)"
             nomeGiorni="secondo_giorni"
-            nomeOre="secondo_ore"
-            valore={separaGiorniOre(fase.secondo.soglia_valore, fase.secondo.soglia_unita)}
-          />
-          <CampoDurata
-            label="Ripeti ogni (allert periodico)"
-            nomeGiorni="intervallo_giorni"
-            nomeOre="intervallo_ore"
-            valore={separaGiorniOre(fase.periodico.ripeti_ogni_valore, fase.periodico.ripeti_ogni_unita)}
-          />
-          <label className="block text-sm">
-            <span className="text-gray-600">Numero massimo di solleciti prima dell&apos;escalation</span>
-            <input
-              type="number"
-              min={1}
-              name="tetto"
-              defaultValue={fase.periodico.ripeti_max_volte ?? 3}
-              className="mt-1 w-24 border rounded px-2 py-1"
-            />
-          </label>
-          {fase.escalation && (
-            <p className="text-xs text-gray-400">
-              Dopo il tetto: <span className="font-medium">{fase.escalation.nome}</span> (notifica {fase.escalation.destinatari_ruolo?.join(", ")})
-            </p>
-          )}
-
-          <button type="submit" className="mt-2 bg-gray-900 text-white text-sm rounded px-3 py-1.5">
-            Salva soglie
-          </button>
-        </form>
-      ))}
-    </div>
-  );
-}
-
-/** Coppia di campi numerici Giorni + Ore con etichetta, per i form delle soglie SLA. */
-function CampoDurata({
-  label,
-  nomeGiorni,
-  nomeOre,
-  valore,
-}: {
-  label: string;
-  nomeGiorni: string;
-  nomeOre: string;
-  valore: { giorni: number; ore: number };
-}) {
-  return (
-    <div className="text-sm">
-      <span className="text-gray-600">{label}</span>
-      <div className="flex gap-2 mt-1">
-        <label className="flex items-center gap-1">
-          <input
-            type="number"
-            min={0}
-            name={nomeGiorni}
-            defaultValue={valore.giorni}
-            className="w-16 border rounded px-2 py-1"
-          />
-          <span className="text-xs text-gray-500">giorni</span>
-        </label>
-        <label className="flex items-center gap-1">
-          <input
-            type="number"
-            min={0}
-            max={23}
-            name={nomeOre}
-            defaultValue={valore.ore}
-            className="w-16 border rounded px-2 py-1"
-          />
-          <span className="text-xs text-gray-500">ore</span>
-        </label>
-      </div>
-    </div>
-  );
-}
+    

@@ -45,7 +45,8 @@ export async function caricaDatiDirezione(supabase: any) {
         fasi_workflow(codice, nome),
         pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
           clienti(nome_completo),
-          utenti:operatore_assegnato_id(id, nome, cognome, colore_badge)
+          utenti:operatore_assegnato_id(id, nome, cognome, colore_badge),
+          brands(codice, nome, colore)
         )
       `)
       .in("stato", ["da_iniziare", "in_corso"])
@@ -133,6 +134,7 @@ export async function caricaDatiDirezione(supabase: any) {
       operatoreNome: opNome,
       operatoreColore: opColore,
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
+      brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
     };
   });
 

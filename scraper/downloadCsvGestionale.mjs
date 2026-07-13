@@ -39,10 +39,23 @@ const {
   GESTIONALE_USER,
   GESTIONALE_PASS,
   CARTELLA_DOWNLOAD = "./downloads",
-  // URL diretti delle pagine: stabili, non serve passare dai menu.
-  VAMART_URL_COMMISSIONI = "https://cinquegrana.azurewebsites.net/Commissioni",
-  VAMART_URL_PIANO_DI_CARICO = "https://cinquegrana.azurewebsites.net/PianoDiCarico",
+  // URL diretti delle pagine: stabili, non serve passare dai menu. Se non
+  // impostati esplicitamente, si derivano dall'origine di GESTIONALE_URL:
+  // cosi' lo stesso script funziona automaticamente per QUALSIASI istanza
+  // Vamart (Cinquegrana, Master Mobili, o un brand futuro) senza bisogno di
+  // due variabili d'ambiente in piu' per ciascun nuovo brand.
+  VAMART_URL_COMMISSIONI,
+  VAMART_URL_PIANO_DI_CARICO,
 } = process.env;
+
+function derivaUrlPagina(urlEsplicito, percorso) {
+  if (urlEsplicito) return urlEsplicito;
+  if (!GESTIONALE_URL) return undefined;
+  return new URL(percorso, GESTIONALE_URL).toString();
+}
+
+const URL_COMMISSIONI = derivaUrlPagina(VAMART_URL_COMMISSIONI, "/Commissioni");
+const URL_PIANO_DI_CARICO = derivaUrlPagina(VAMART_URL_PIANO_DI_CARICO, "/PianoDiCarico");
 
 let contatoreScreenshot = 0;
 async function debugScreenshot(page, etichetta) {
@@ -114,7 +127,7 @@ async function scaricaCsv() {
     // ── 2. COMMISSIONI DI ASSISTENZA ────────────────────────────────────
     try {
       console.log("2. Navigazione alla pagina Commissioni...");
-      await page.goto(VAMART_URL_COMMISSIONI, { waitUntil: "networkidle" });
+      await page.goto(URL_COMMISSIONI, { waitUntil: "networkidle" });
       if (page.url().includes("/Account/Login")) {
         throw new Error("Login su Vamart fallito: credenziali non valide o cambiate (controllare i secret VAMART_USER/VAMART_PASS).");
       }
@@ -147,7 +160,7 @@ async function scaricaCsv() {
     // ── 3. PIANO DI CARICO (stessa sessione) ────────────────────────────
     try {
       console.log("3. Navigazione alla pagina Piano di Carico...");
-      await page.goto(VAMART_URL_PIANO_DI_CARICO, { waitUntil: "networkidle" });
+      await page.goto(URL_PIANO_DI_CARICO, { waitUntil: "networkidle" });
       console.log(`   Pagina attuale: ${page.url()}`);
       await debugScreenshot(page, "piano-prima-filtro");
 

@@ -7,6 +7,8 @@
 //
 // Uso:
 //   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node bulkImportVamartCsv.mjs "/percorso/file.csv"
+//   (opzionale) BRAND_CODICE=MASTERMOBILI ... utile per il caricamento
+//   storico iniziale di un nuovo brand (default: CINQUEGRANA).
 
 import { createClient } from "@supabase/supabase-js";
 import { parseFileCompleto } from "./parseCsv.mjs";
@@ -21,6 +23,7 @@ if (PROXY_URL) {
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const BRAND_CODICE = process.env.BRAND_CODICE || "CINQUEGRANA";
 const CHUNK = 500;
 
 function chunkArray(arr, size) {
@@ -30,12 +33,14 @@ function chunkArray(arr, size) {
 }
 
 /** Legge tutte le righe di una tabella paginando (PostgREST limita le righe per richiesta). */
-async function fetchAll(supabase, table, columns) {
+async function fetchAll(supabase, table, columns, filtroEq = {}) {
   const risultati = [];
   let offset = 0;
   const pageSize = 1000;
   while (true) {
-    const { data, error } = await supabase.from(table).select(columns).range(offset, offset + pageSize - 1);
+    let query = supabase.from(table).select(columns);
+    for (const [campo, valore] of Object.entries(filtroEq)) query = query.eq(campo, valore);
+    const { data, error } = await query.range(offset, offset + pageSize - 1);
     if (error) throw error;
     risultati.push(...data);
     if (data.length < pageSize) break;
@@ -52,6 +57,16 @@ async function main() {
   }
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+  const { data: brand, error: erroreBrand } = await supabase
+    .from("brands")
+    .select("id, nome")
+    .eq("codice", BRAND_CODICE)
+    .maybeSingle();
+  if (erroreBrand) throw erroreBrand;
+  if (!brand) throw new Error(`Brand '${BRAND_CODICE}' non trovato in brands (hai gia' applicato la migrazione 0011_multi_brand.sql?)`);
+  const brandId = brand.id;
+  console.log(`Brand: ${brand.nome} (${BRAND_CODICE})`);
+
   console.log(`Lettura file: ${percorsoFile}`);
   const { righe, errori: erroriParsing } = parseFileCompleto(percorsoFile);
   const pratiche = raggruppaInPratiche(righe);
@@ -59,15 +74,15 @@ async function main() {
 
   const { data: importazione } = await supabase
     .from("importazioni_csv")
-    .insert({ nome_file: percorsoFile.split("/").pop(), origine: "manuale", righe_totali: righe.length, stato: "in_corso" })
+    .insert({ nome_file: percorsoFile.split("/").pop(), origine: "manuale", righe_totali: righe.length, stato: "in_corso", brand_id: brandId })
     .select().single();
 
-  // ---- 1. precarico stato attuale del database ----
+  // ---- 1. precarico stato attuale del database (solo per questo brand) ----
   console.log("Carico clienti/fornitori/pratiche/righe esistenti...");
   const [clientiEsistenti, fornitoriEsistenti, praticheEsistenti] = await Promise.all([
-    fetchAll(supabase, "clienti", "id,nome_completo"),
+    fetchAll(supabase, "clienti", "id,nome_completo", { brand_id: brandId }),
     fetchAll(supabase, "fornitori", "id,ragione_sociale"),
-    fetchAll(supabase, "pratiche", "id,codice_commissione,stato_generale"),
+    fetchAll(supabase, "pratiche", "id,codice_commissione,stato_generale", { brand_id: brandId }),
   ]);
   const clientiMap = new Map(clientiEsistenti.map((c) => [c.nome_completo, c.id]));
   const fornitoriMap = new Map(fornitoriEsistenti.map((f) => [f.ragione_sociale, f.id]));
@@ -81,7 +96,7 @@ async function main() {
   // ---- 2. clienti nuovi ----
   const nomiClientiNuovi = [...new Set(pratiche.map((p) => p.cliente).filter((n) => !clientiMap.has(n)))];
   for (const gruppo of chunkArray(nomiClientiNuovi, CHUNK)) {
-    const { data, error } = await supabase.from("clienti").insert(gruppo.map((nome_completo) => ({ nome_completo }))).select();
+    const { data, error } = await supabase.from("clienti").insert(gruppo.map((nome_completo) => ({ nome_completo, brand_id: brandId }))).select();
     if (error) throw error;
     for (const c of data) clientiMap.set(c.nome_completo, c.id);
   }
@@ -105,6 +120,7 @@ async function main() {
       praticheNuovePayload.push({
         codice_commissione: p.codice_commissione,
         cliente_id: clientiMap.get(p.cliente),
+        brand_id: brandId,
         tipo: p.tipo,
         categoria: p.categoria,
         canale_origine: "csv",

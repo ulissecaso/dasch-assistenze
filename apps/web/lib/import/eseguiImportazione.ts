@@ -98,9 +98,24 @@ export type RisultatoImportazione = {
 export async function eseguiImportazioneCsv(
   supabase: any,
   testoCsv: string,
-  opzioni: { nomeFile: string; origine?: "manuale" | "scraper_automatico" | "api" }
+  opzioni: {
+    nomeFile: string;
+    origine?: "manuale" | "scraper_automatico" | "api";
+    /** Codice del brand a cui appartiene questo CSV (vedi tabella brands): default CINQUEGRANA per compatibilita'. */
+    brandCodice?: string;
+  }
 ): Promise<RisultatoImportazione> {
   const origine = opzioni.origine ?? "manuale";
+  const brandCodice = opzioni.brandCodice ?? "CINQUEGRANA";
+
+  const { data: brand, error: erroreBrand } = await supabase
+    .from("brands")
+    .select("id")
+    .eq("codice", brandCodice)
+    .maybeSingle();
+  if (erroreBrand) throw erroreBrand;
+  if (!brand) throw new Error(`Brand '${brandCodice}' non trovato in brands (migrazione 0011_multi_brand.sql applicata?)`);
+  const brandId = brand.id as string;
 
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
@@ -122,7 +137,7 @@ export async function eseguiImportazioneCsv(
 
   const { data: importazione, error: erroreImport } = await supabase
     .from("importazioni_csv")
-    .insert({ nome_file: opzioni.nomeFile, origine, righe_totali: righe.length, stato: "in_corso" })
+    .insert({ nome_file: opzioni.nomeFile, origine, righe_totali: righe.length, stato: "in_corso", brand_id: brandId })
     .select()
     .single();
   if (erroreImport) throw erroreImport;
@@ -134,7 +149,7 @@ export async function eseguiImportazioneCsv(
   const mappaPraticheEsistenti = new Map<string, any>();
   await Promise.all(
     inBlocchi(codiciCommissione).map(async (blocco) => {
-      const { data, error } = await supabase.from("pratiche").select("*").in("codice_commissione", blocco);
+      const { data, error } = await supabase.from("pratiche").select("*").eq("brand_id", brandId).in("codice_commissione", blocco);
       if (error) throw error;
       for (const p of data ?? []) mappaPraticheEsistenti.set(p.codice_commissione, p);
     })
@@ -197,7 +212,7 @@ export async function eseguiImportazioneCsv(
   if (nomiClienti.length > 0) {
     await Promise.all(
       inBlocchi(nomiClienti).map(async (blocco) => {
-        const { data, error } = await supabase.from("clienti").select("id, nome_completo").in("nome_completo", blocco);
+        const { data, error } = await supabase.from("clienti").select("id, nome_completo").eq("brand_id", brandId).in("nome_completo", blocco);
         if (error) throw error;
         for (const c of data ?? []) mappaClienti.set(c.nome_completo, c.id);
       })
@@ -206,7 +221,7 @@ export async function eseguiImportazioneCsv(
     if (clientiMancanti.length > 0) {
       await Promise.all(
         inBlocchi(clientiMancanti, 500).map(async (blocco) => {
-          const { data, error } = await supabase.from("clienti").insert(blocco.map((nome_completo) => ({ nome_completo }))).select("id, nome_completo");
+          const { data, error } = await supabase.from("clienti").insert(blocco.map((nome_completo) => ({ nome_completo, brand_id: brandId }))).select("id, nome_completo");
           if (error) throw error;
           for (const c of data ?? []) mappaClienti.set(c.nome_completo, c.id);
         })
@@ -279,6 +294,7 @@ export async function eseguiImportazioneCsv(
       codice_commissione: p.codice_commissione,
       codice_commissione_riferimento: p.codice_commissione,
       cliente_id: mappaClienti.get(p.cliente),
+      brand_id: brandId,
       tipo: "consegna",
       categoria: p.categoria,
       canale_origine: "csv",

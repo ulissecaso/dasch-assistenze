@@ -21,17 +21,17 @@ function suffissoIntervento(numeroInterventiPrecedenti: number): string {
   return lettera;
 }
 
-async function trovaOCreaCliente(supabase: any, dati: SegnalazioneEstratta) {
+async function trovaOCreaCliente(supabase: any, dati: SegnalazioneEstratta, brandId: string) {
   if (dati.email) {
-    const { data } = await supabase.from("clienti").select("*").ilike("email", dati.email).limit(1).maybeSingle();
+    const { data } = await supabase.from("clienti").select("*").eq("brand_id", brandId).ilike("email", dati.email).limit(1).maybeSingle();
     if (data) return await arricchisciCliente(supabase, data, dati);
   }
   if (dati.telefono) {
-    const { data } = await supabase.from("clienti").select("*").eq("telefono", dati.telefono).limit(1).maybeSingle();
+    const { data } = await supabase.from("clienti").select("*").eq("brand_id", brandId).eq("telefono", dati.telefono).limit(1).maybeSingle();
     if (data) return await arricchisciCliente(supabase, data, dati);
   }
   if (dati.nome) {
-    const { data } = await supabase.from("clienti").select("*").ilike("nome_completo", dati.nome).limit(1).maybeSingle();
+    const { data } = await supabase.from("clienti").select("*").eq("brand_id", brandId).ilike("nome_completo", dati.nome).limit(1).maybeSingle();
     if (data) return await arricchisciCliente(supabase, data, dati);
   }
 
@@ -42,6 +42,7 @@ async function trovaOCreaCliente(supabase: any, dati: SegnalazioneEstratta) {
       telefono: dati.telefono,
       email: dati.email,
       note: "Creato automaticamente da segnalazione email",
+      brand_id: brandId,
     })
     .select()
     .single();
@@ -63,7 +64,12 @@ async function arricchisciCliente(supabase: any, cliente: any, dati: Segnalazion
 
 export async function elaboraSegnalazione(
   supabase: any,
-  dati: SegnalazioneEstratta
+  dati: SegnalazioneEstratta,
+  // Brand a cui appartiene questa segnalazione. Oggi il cron legge un'unica
+  // casella IMAP (vedi app/api/cron/importa-email/route.ts), quindi arriva
+  // sempre valorizzato al brand di quella casella; se in futuro Master Mobili
+  // avesse una propria casella email, il chiamante passera' il suo brandId.
+  brandId: string
 ): Promise<EsitoElaborazione> {
   if (dati.formato === "sconosciuto" || !dati.commissione || !dati.nome) {
     return {
@@ -77,11 +83,12 @@ export async function elaboraSegnalazione(
     };
   }
 
-  const cliente = await trovaOCreaCliente(supabase, dati);
+  const cliente = await trovaOCreaCliente(supabase, dati, brandId);
 
   const { data: praticheEsistenti, error: erroreLookup } = await supabase
     .from("pratiche")
     .select("id, codice_commissione, stato_generale")
+    .eq("brand_id", brandId)
     .eq("codice_commissione_riferimento", dati.commissione)
     .order("created_at", { ascending: false });
   if (erroreLookup) throw erroreLookup;
@@ -122,23 +129,9 @@ export async function elaboraSegnalazione(
   // Nessuna pratica attiva per questa commissione: la creiamo. Se esistono
   // solo pratiche passate (tutte chiuse/annullate) per la stessa commissione,
   // usiamo un codice con suffisso per tenerle distinte.
-  //
-  // IMPORTANTE: dati.commissione è il numero che il CLIENTE ha scritto nella
-  // mail come riferimento a un intervento precedente — NON è il codice della
-  // nuova commissione di assistenza. Vamart assegnerà un numero nuovo e
-  // diverso quando l'operatore la creerà (regola confermata dal Direttore).
-  // Usiamo quindi un codice provvisorio "IN-ATTESA-..." finché
-  // l'importatore da Vamart (importCommissioniAssistenza.mjs) non trova - per
-  // nome cliente - la vera commissione e la ricollega. Non usare mai
-  // dati.commissione come codice_commissione: è già un numero Vamart
-  // esistente (di solito già chiuso), riusarlo creerebbe confusione con la
-  // pratica storica e rischio di importare dati sbagliati dal Piano di Carico.
   const numeroPrecedenti = praticheEsistenti?.length ?? 0;
-  const riferimentoSicuro = dati.commissione.replace(/\//g, "-");
   const codiceCommissione =
-    numeroPrecedenti === 0
-      ? `IN-ATTESA-${riferimentoSicuro}`
-      : `IN-ATTESA-${riferimentoSicuro}-${suffissoIntervento(numeroPrecedenti)}`;
+    numeroPrecedenti === 0 ? dati.commissione : `${dati.commissione}-${suffissoIntervento(numeroPrecedenti)}`;
 
   const { data: nuovaPratica, error: erroreInsert } = await supabase
     .from("pratiche")
@@ -146,6 +139,7 @@ export async function elaboraSegnalazione(
       codice_commissione: codiceCommissione,
       codice_commissione_riferimento: dati.commissione,
       cliente_id: cliente.id,
+      brand_id: brandId,
       tipo: dati.tipoProblema,
       descrizione: dati.descrizione,
       canale_origine: "email",

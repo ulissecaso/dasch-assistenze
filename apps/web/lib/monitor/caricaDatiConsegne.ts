@@ -68,7 +68,8 @@ export async function caricaDatiConsegne(supabase: any) {
         fasi_workflow!inner(codice, nome),
         pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
           clienti(nome_completo),
-          utenti:operatore_assegnato_id(id, nome, cognome, colore_badge)
+          utenti:operatore_assegnato_id(id, nome, cognome, colore_badge),
+          brands(codice, nome, colore)
         )
       `)
       .eq("stato", "in_corso")
@@ -80,7 +81,7 @@ export async function caricaDatiConsegne(supabase: any) {
     // "merce parzialmente arrivata" (incrociate con la vista qui sotto).
     supabase
       .from("pratiche")
-      .select("id, codice_commissione, operatore_assegnato_id, data_consegna_prevista, clienti(nome_completo), utenti:operatore_assegnato_id(id, nome, cognome, colore_badge)")
+      .select("id, codice_commissione, operatore_assegnato_id, data_consegna_prevista, clienti(nome_completo), utenti:operatore_assegnato_id(id, nome, cognome, colore_badge), brands(codice, nome, colore)")
       .eq("tipo", "consegna")
       .not("stato_generale", "in", '("chiusa","annullata")'),
     supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "consegna").not("stato_generale", "in", '("chiusa","annullata")'),
@@ -148,6 +149,7 @@ export async function caricaDatiConsegne(supabase: any) {
         operatoreNome: opNome,
         operatoreColore: opColore,
         azione: "Valutare consegna parziale o sollecitare il fornitore",
+        brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
       };
     });
 
@@ -173,6 +175,7 @@ export async function caricaDatiConsegne(supabase: any) {
       operatoreNome: opNome,
       operatoreColore: opColore,
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
+      brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
     };
   });
 

@@ -8,6 +8,18 @@
 //
 // Variabili d'ambiente richieste (da impostare su Vercel):
 //   IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASSWORD, CRON_SECRET
+//
+// MULTI-BRAND — PUNTO APERTO: questo cron legge UNA SOLA casella IMAP, oggi
+// quella di Cinquegrana (servizioclienti@arredamenticinquegrana.it). Tutte
+// le segnalazioni ricevute vengono quindi etichettate come Cinquegrana (vedi
+// BRAND_CODICE_DEFAULT sotto). Se Master Mobili avra' una propria casella di
+// segnalazioni, le opzioni sono: (a) una seconda variabile IMAP_*_MASTERMOBILI
+// e un secondo cron separato che chiama questa stessa logica con l'altro
+// brandId, oppure (b) se useranno la STESSA casella, riconoscere il brand dal
+// destinatario del messaggio (envelope.to) invece che da una casella dedicata.
+// Nessuna delle due e' stata implementata qui: serve sapere come Master
+// Mobili riceve le segnalazioni prima di scegliere.
+const BRAND_CODICE_DEFAULT = "CINQUEGRANA";
 import { NextResponse } from "next/server";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
@@ -38,6 +50,17 @@ export async function GET(req: Request) {
   }
 
   const supabase = creaSupabaseClientAdmin();
+
+  const { data: brand, error: erroreBrand } = await supabase
+    .from("brands")
+    .select("id")
+    .eq("codice", BRAND_CODICE_DEFAULT)
+    .maybeSingle();
+  if (erroreBrand || !brand) {
+    return NextResponse.json({ errore: `brand '${BRAND_CODICE_DEFAULT}' non trovato (migrazione 0011 applicata?)` }, { status: 500 });
+  }
+  const brandId = brand.id as string;
+
   const client = new ImapFlow({
     host,
     port,
@@ -77,7 +100,7 @@ export async function GET(req: Request) {
           const mittente = parsed.from?.text ?? "";
 
           const dati = analizzaSegnalazione(oggetto, corpo);
-          const esito = await elaboraSegnalazione(supabase, dati);
+          const esito = await elaboraSegnalazione(supabase, dati, brandId);
 
           await supabase.from("importazioni_email").insert({
             message_id: messageId,

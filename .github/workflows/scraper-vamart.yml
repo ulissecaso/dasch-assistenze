@@ -19,11 +19,19 @@ name: scraper-vamart
 # tutto l'anno.
 #
 # Richiede questi Repository secrets (Settings > Secrets and variables > Actions):
-#   VAMART_URL                  URL della pagina di login di Vamart
-#   VAMART_USER                 utente di login Vamart
-#   VAMART_PASS                 password di login Vamart
+#   VAMART_URL                  URL della pagina di login di Vamart (Cinquegrana)
+#   VAMART_URL_MASTERMOBILI     URL della pagina di login di Vamart (Master Mobili),
+#                                oggi https://mastermobili20250616103641.azurewebsites.net/Account/Login
+#   VAMART_USER                 utente di login Vamart (STESSO per entrambi i brand)
+#   VAMART_PASS                 password di login Vamart (STESSA per entrambi i brand)
 #   SUPABASE_URL                stesso valore di SUPABASE_URL usato dall'app
 #   SUPABASE_SERVICE_ROLE_KEY   service role key di Supabase (mai la anon key)
+#
+# Due job separati (uno per brand), stesso codice: il modulo di importazione
+# non cambia tra i due, cambiano solo l'URL Vamart e il BRAND_CODICE passato
+# agli script di import (vedi scripts/import-csv/*.mjs). Se in futuro Master
+# Mobili avesse credenziali proprie, basta aggiungere VAMART_USER_MASTERMOBILI
+# / VAMART_PASS_MASTERMOBILI e usarli al posto di quelli condivisi qui sotto.
 
 on:
   schedule:
@@ -34,7 +42,7 @@ on:
   workflow_dispatch: {}      # permette anche l'avvio manuale da GitHub
 
 jobs:
-  scrape-e-importa:
+  scrape-e-importa-cinquegrana:
     runs-on: ubuntu-latest
     # importVamartCsv.mjs ora usa query in blocco/parallele (stessa tecnica
     # dell'upload manuale): dovrebbe completare in meno di un minuto anche
@@ -73,6 +81,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BRAND_CODICE: CINQUEGRANA
         run: node importCommissioniAssistenza.mjs ../../scraper/downloads/ultimo.csv
 
       - name: Importa Piano di Carico in Supabase (avanzamento fasi ordine/giacenza/consegna)
@@ -81,13 +90,14 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ORIGINE_IMPORT: scraper_automatico
+          BRAND_CODICE: CINQUEGRANA
         run: node importVamartCsv.mjs ../../scraper/downloads/ultimo-piano-di-carico.csv
 
       - name: Carica CSV scaricati e screenshot di debug come artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ultimi-csv-vamart
+          name: ultimi-csv-vamart-cinquegrana
           path: |
             scraper/downloads/ultimo.csv
             scraper/downloads/ultimo-piano-di-carico.csv
@@ -98,4 +108,68 @@ jobs:
       - name: Notifica fallimento
         if: failure()
         run: |
-          echo "::error::Scraping/import Vamart fallito. Controllare il log (cambio password, layout portale, 2FA) e importare manualmente dal pannello admin nel frattempo."
+          echo "::error::Scraping/import Vamart (Cinquegrana) fallito. Controllare il log (cambio password, layout portale, 2FA) e importare manualmente dal pannello admin nel frattempo."
+
+  scrape-e-importa-mastermobili:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Installa dipendenze scraper
+        working-directory: scraper
+        run: npm install
+
+      - name: Installa Chromium per Playwright
+        working-directory: scraper
+        run: npx playwright install --with-deps chromium
+
+      - name: Scarica CSV commissioni di assistenza + Piano di Carico da Vamart
+        working-directory: scraper
+        env:
+          GESTIONALE_URL: ${{ secrets.VAMART_URL_MASTERMOBILI }}
+          GESTIONALE_USER: ${{ secrets.VAMART_USER }}
+          GESTIONALE_PASS: ${{ secrets.VAMART_PASS }}
+        run: npm run download
+
+      - name: Installa dipendenze importatore
+        working-directory: scripts/import-csv
+        run: npm install
+
+      - name: Importa commissioni di assistenza in Supabase
+        working-directory: scripts/import-csv
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BRAND_CODICE: MASTERMOBILI
+        run: node importCommissioniAssistenza.mjs ../../scraper/downloads/ultimo.csv
+
+      - name: Importa Piano di Carico in Supabase (avanzamento fasi ordine/giacenza/consegna)
+        working-directory: scripts/import-csv
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ORIGINE_IMPORT: scraper_automatico
+          BRAND_CODICE: MASTERMOBILI
+        run: node importVamartCsv.mjs ../../scraper/downloads/ultimo-piano-di-carico.csv
+
+      - name: Carica CSV scaricati e screenshot di debug come artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultimi-csv-vamart-mastermobili
+          path: |
+            scraper/downloads/ultimo.csv
+            scraper/downloads/ultimo-piano-di-carico.csv
+            scraper/downloads/debug-*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Notifica fallimento
+        if: failure()
+        run: |
+          echo "::error::Scraping/import Vamart (Master Mobili) fallito. Controllare il log (cambio password, layout portale, 2FA) e importare manualmente dal pannello admin nel frattempo."

@@ -27,6 +27,8 @@
 //
 // Uso:
 //   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node importCommissioniAssistenza.mjs "/percorso/commissioni.csv"
+//   (opzionale) BRAND_CODICE=MASTERMOBILI ... stesso principio di
+//   importVamartCsv.mjs: default CINQUEGRANA, invariato rispetto a prima.
 
 import { readFileSync } from "node:fs";
 import { parse } from "csv-parse/sync";
@@ -42,6 +44,7 @@ if (PROXY_URL) {
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const BRAND_CODICE = process.env.BRAND_CODICE || "CINQUEGRANA";
 
 // Finestra di tolleranza per collegare una commissione Vamart a una pratica
 // "in attesa": la data di apertura della pratica deve cadere entro questi
@@ -100,6 +103,16 @@ async function main() {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+  const { data: brand, error: erroreBrand } = await supabase
+    .from("brands")
+    .select("id, nome")
+    .eq("codice", BRAND_CODICE)
+    .maybeSingle();
+  if (erroreBrand) throw erroreBrand;
+  if (!brand) throw new Error(`Brand '${BRAND_CODICE}' non trovato in brands (hai gia' applicato la migrazione 0011_multi_brand.sql?)`);
+  const brandId = brand.id;
+  console.log(`Brand: ${brand.nome} (${BRAND_CODICE})`);
+
   // Fasi del workflow che questo script deve toccare: risolte per codice,
   // non per id fisso, cosi' restano valide anche se qualcuno le ricrea.
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
@@ -126,6 +139,7 @@ async function main() {
       origine: "scraper_automatico",
       righe_totali: righe.length,
       stato: "in_corso",
+      brand_id: brandId,
     })
     .select()
     .single();
@@ -144,6 +158,7 @@ async function main() {
       const { data: praticaEsistente } = await supabase
         .from("pratiche")
         .select("id")
+        .eq("brand_id", brandId)
         .eq("codice_commissione", codiceCommissione)
         .maybeSingle();
 
@@ -161,6 +176,7 @@ async function main() {
       const { data: clientiOmonimi } = await supabase
         .from("clienti")
         .select("id")
+        .eq("brand_id", brandId)
         .ilike("nome_completo", nomeCompleto);
 
       let candidati = [];
@@ -169,6 +185,7 @@ async function main() {
         const { data: pratichePendenti } = await supabase
           .from("pratiche")
           .select("id, data_apertura, pratica_fasi!inner(id, stato, fase_id)")
+          .eq("brand_id", brandId)
           .in("cliente_id", idsClienti)
           .not("stato_generale", "in", "(chiusa,annullata)")
           .eq("pratica_fasi.fase_id", faseCreazioneCommissioneId)
@@ -232,6 +249,7 @@ async function main() {
       const { data: clienteEsistente } = await supabase
         .from("clienti")
         .select("id")
+        .eq("brand_id", brandId)
         .ilike("nome_completo", nomeCompleto)
         .maybeSingle();
 
@@ -239,7 +257,7 @@ async function main() {
       if (!clienteId) {
         const { data: nuovoCliente, error } = await supabase
           .from("clienti")
-          .insert({ nome_completo: nomeCompleto, citta: riga.citta || null })
+          .insert({ nome_completo: nomeCompleto, citta: riga.citta || null, brand_id: brandId })
           .select()
           .single();
         if (error) throw error;
@@ -257,6 +275,7 @@ async function main() {
           codice_commissione: codiceCommissione,
           codice_commissione_riferimento: codiceCommissione,
           cliente_id: clienteId,
+          brand_id: brandId,
           tipo: "assistenza",
           canale_origine: "manuale",
           fonte_dati: "csv",

@@ -26,6 +26,9 @@ export type AlertRigaMonitor = {
   operatoreNome: string;
   operatoreColore: string;
   azione: string;
+  /** Brand a cui appartiene la pratica (Cinquegrana / Master Mobili). Assente
+   *  = board che mostra un solo brand per definizione (nessun badge). */
+  brand?: { codice: string; nome: string; colore: string };
 };
 
 export type OperatoreCardMonitor = {
@@ -87,8 +90,15 @@ export default function MonitorBoard({
   const [ora, setOra] = useState<{ data: string; clock: string }>({ data: "", clock: "" });
   const [kiosk, setKiosk] = useState(false);
   const [soloUrgenti, setSoloUrgenti] = useState(false);
+  const [filtroBrand, setFiltroBrand] = useState<string | null>(null); // null = tutti i brand
   const boardRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  // Elenco dei brand realmente presenti nelle righe: il filtro compare solo
+  // se ce ne sono almeno due (altrimenti sarebbe un controllo inutile).
+  const brandsDisponibili = Array.from(
+    new Map(alertRows.filter((r) => r.brand).map((r) => [r.brand!.codice, r.brand!])).values()
+  );
 
   useEffect(() => {
     const mesi = ["GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO", "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"];
@@ -118,7 +128,8 @@ export default function MonitorBoard({
     setKiosk((k) => !k);
   }
 
-  const righeVisibili = (soloUrgenti ? alertRows.filter((r) => r.livello === "critica") : alertRows).slice(0, righeMax);
+  const righePerLivello = soloUrgenti ? alertRows.filter((r) => r.livello === "critica") : alertRows;
+  const righeVisibili = (filtroBrand ? righePerLivello.filter((r) => r.brand?.codice === filtroBrand) : righePerLivello).slice(0, righeMax);
 
   return (
     <div ref={boardRef} className="mon-wrap">
@@ -139,6 +150,27 @@ export default function MonitorBoard({
             <Icona nome="filter" className="ic" /> {soloUrgenti ? "Mostra tutti" : "Mostra solo urgenti"}
           </div>
         </div>
+
+        {brandsDisponibili.length > 1 && (
+          <div className="mon-brand-row">
+            <button
+              className={`mon-brand-chip${filtroBrand === null ? " attivo" : ""}`}
+              onClick={() => setFiltroBrand(null)}
+            >
+              Tutti i brand
+            </button>
+            {brandsDisponibili.map((b) => (
+              <button
+                key={b.codice}
+                className={`mon-brand-chip${filtroBrand === b.codice ? " attivo" : ""}`}
+                style={filtroBrand === b.codice ? { background: b.colore, borderColor: b.colore } : { borderColor: b.colore, color: b.colore }}
+                onClick={() => setFiltroBrand(b.codice)}
+              >
+                {b.nome}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="mon-header">
           <div className="op-row">
@@ -198,7 +230,12 @@ export default function MonitorBoard({
                     <td><Icona nome="warn-sm" className={`ic ic-${r.livello === "critica" ? "red" : r.livello === "alta" ? "orange" : r.livello === "media" ? "yellow" : "green"}`} /></td>
                     <td><span className={`mon-badge ${r.livello}`}>{r.livello.toUpperCase()}</span></td>
                     <td>{r.scadenzaData}</td>
-                    <td>{r.praticaCodice}</td>
+                    <td>
+                      {r.brand && brandsDisponibili.length > 1 && (
+                        <span className="mon-brand-dot" style={{ background: r.brand.colore }} title={r.brand.nome} />
+                      )}
+                      {r.praticaCodice}
+                    </td>
                     <td>{r.cliente}</td>
                     <td><div className="fase-cell"><Icona nome={r.faseIcona as any} className="ic" /> {r.faseNome}</div></td>
                     <td>{r.descrizione}</td>
@@ -254,6 +291,10 @@ const CSS = `
 .op-urgent{font-size:14px;font-weight:800;white-space:nowrap;}
 .mon-filter{background:#131a26;border:1px solid #2a3242;color:#cbd5e1;border-radius:8px;padding:5px 9px;font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0;}
 .mon-filter .ic{width:13px;height:13px;color:#cbd5e1;}
+.mon-brand-row{flex:0 0 auto;display:flex;gap:8px;margin-bottom:8px;}
+.mon-brand-chip{background:#131a26;border:1.5px solid #2a3242;color:#cbd5e1;border-radius:999px;padding:4px 12px;font-size:12.5px;font-weight:600;cursor:pointer;}
+.mon-brand-chip.attivo{color:#0a0e16;}
+.mon-brand-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle;}
 .mon-table-wrap{flex:1 1 auto;min-height:0;background:#0f1420;border:1px solid #1e2634;border-radius:12px;overflow:auto;margin-bottom:10px;}
 .mon-empty{padding:22px;color:#8b96a8;font-size:14px;}
 .mon-table{width:100%;border-collapse:collapse;font-size:14.5px;}

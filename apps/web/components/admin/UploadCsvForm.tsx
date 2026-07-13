@@ -16,6 +16,8 @@ export default function UploadCsvForm() {
   const [stato, setStato] = useState<Stato>("idle");
   const [messaggio, setMessaggio] = useState<string | null>(null);
 
+  const [brandCodice, setBrandCodice] = useState("CINQUEGRANA");
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const file = inputRef.current?.files?.[0];
@@ -26,6 +28,7 @@ export default function UploadCsvForm() {
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("brand", brandCodice);
 
     try {
       const res = await fetch("/api/import-csv", { method: "POST", body: formData });
@@ -48,6 +51,15 @@ export default function UploadCsvForm() {
 
   return (
     <form onSubmit={handleSubmit} className="mt-3 flex flex-wrap items-center gap-3">
+      <select
+        value={brandCodice}
+        onChange={(e) => setBrandCodice(e.target.value)}
+        className="text-sm border rounded px-2 py-1.5"
+        aria-label="Brand del CSV da importare"
+      >
+        <option value="CINQUEGRANA">Arredamenti Cinquegrana</option>
+        <option value="MASTERMOBILI">Master Mobili</option>
+      </select>
       <input ref={inputRef} type="file" name="file" accept=".csv" required className="text-sm" />
       <button
         type="submit"

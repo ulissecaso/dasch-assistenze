@@ -32,7 +32,8 @@ export default async function DashboardOperatorePage() {
         id, stato, data_prevista, fase_id,
         fasi_workflow(codice, nome),
         pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id,
-          clienti(nome_completo)
+          clienti(nome_completo),
+          brands(codice, nome, colore)
         )
       `)
       .in("stato", ["da_iniziare", "in_corso"])
@@ -76,7 +77,7 @@ export default async function DashboardOperatorePage() {
   // 100%), quindi va costruita a parte incrociando la stessa vista.
   const { data: praticheConsegnaOperatore } = await supabase
     .from("pratiche")
-    .select("id, codice_commissione, data_consegna_prevista, clienti(nome_completo)")
+    .select("id, codice_commissione, data_consegna_prevista, clienti(nome_completo), brands(codice, nome, colore)")
     .eq("tipo", "consegna")
     .eq("operatore_assegnato_id", user.id)
     .not("stato_generale", "in", '("chiusa","annullata")');
@@ -127,6 +128,7 @@ export default async function DashboardOperatorePage() {
       operatoreNome: opNome,
       operatoreColore: opColore,
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
+      brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
     };
   });
 
@@ -152,6 +154,7 @@ export default async function DashboardOperatorePage() {
         operatoreNome: opNome,
         operatoreColore: opColore,
         azione: "Valutare consegna parziale o sollecitare il fornitore",
+        brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
       };
     });
 

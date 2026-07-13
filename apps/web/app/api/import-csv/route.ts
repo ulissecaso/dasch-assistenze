@@ -28,6 +28,10 @@ export async function POST(req: NextRequest) {
   if (!file) {
     return NextResponse.json({ errore: "Nessun file ricevuto" }, { status: 400 });
   }
+  // Brand del CSV caricato (selezionato nel form, vedi UploadCsvForm.tsx):
+  // default CINQUEGRANA per compatibilita' con vecchie richieste che non lo
+  // inviano ancora.
+  const brandCodice = (formData.get("brand") as string | null) || "CINQUEGRANA";
 
   const testoCsv = await file.text();
   const supabase = creaSupabaseClientAdmin();
@@ -36,6 +40,7 @@ export async function POST(req: NextRequest) {
     const risultato = await eseguiImportazioneCsv(supabase, testoCsv, {
       nomeFile: file.name,
       origine: "manuale",
+      brandCodice,
     });
 
     return NextResponse.json({

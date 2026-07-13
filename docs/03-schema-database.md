@@ -1,6 +1,15 @@
 # 3. Schema del database
 
-Schema completo, eseguibile, in `supabase/migrations/0001_init.sql` (tabelle), `0002_automazioni.sql` (trigger/regole) e `0003_viste_kpi.sql` (funzioni per la dashboard). Di seguito lo schema relazionale sintetico.
+Schema completo, eseguibile, in `supabase/migrations/0001_init.sql` (tabelle), `0002_automazioni.sql` (trigger/regole), `0003_viste_kpi.sql` (funzioni per la dashboard) e `0011_multi_brand.sql` (multi-brand: Arredamenti Cinquegrana + Master Mobili). Di seguito lo schema relazionale sintetico.
+
+## 3.0 Multi-brand (0011_multi_brand.sql)
+
+Stesso database, stesso workflow, stessi operatori: il brand e' una dimensione trasversale, non un secondo sistema. Tabelle aggiunte:
+
+- **brands** — brand gestiti (`CINQUEGRANA`, `MASTERMOBILI`), con colore identificativo per la dashboard.
+- **operatore_brand** — su quali brand puo' lavorare ciascun operatore (un operatore puo' essere abilitato su uno o entrambi).
+
+`clienti` e `pratiche` hanno ora una colonna `brand_id` (default: Cinquegrana, per compatibilita' con codice non ancora aggiornato). L'unicita' di `pratiche.codice_commissione` e' diventata composita `(brand_id, codice_commissione)`, perche' le due istanze Vamart (una per brand) possono generare lo stesso numero di commissione. Le `regole_assegnazione` hanno un `brand_id` nullable: `NULL` = regola valida per entrambi i brand (caso attuale), valorizzato = eccezione specifica di un brand.
 
 ## 3.1 Diagramma entità-relazione (semplificato)
 

@@ -31,6 +31,16 @@ dasch-assistenze/
 
 Lo script di importazione (`scripts/import-csv`) è stato eseguito ed è stato validato contro il file CSV reale fornito (`Piano di carico - Vamart.csv`, 6.016 righe): riconosce correttamente 2.281 pratiche distinte, 1.367 clienti, 73 fornitori, e segnala 8 righe con cliente mancante nel dato sorgente (log in `importazioni_csv_errori`, senza bloccare l'importazione). Il dettaglio del test è in `scripts/import-csv/test-parsing.mjs`.
 
+## Multi-brand: Arredamenti Cinquegrana + Master Mobili
+
+Il sistema gestisce entrambi i brand nello stesso database, con lo stesso workflow e gli stessi operatori (abilitabili su uno o entrambi). Per attivare Master Mobili dopo aver applicato `supabase/migrations/0011_multi_brand.sql`:
+
+1. Aggiungere il secret GitHub Actions `VAMART_URL_MASTERMOBILI` (`https://mastermobili20250616103641.azurewebsites.net/Account/Login`) — le credenziali (`VAMART_USER`/`VAMART_PASS`) sono le stesse gia' in uso per Cinquegrana.
+2. Abilitare gli operatori che devono lavorare anche Master Mobili in `operatore_brand` (dal pannello admin quando disponibile, nel frattempo via SQL editor — vedi esempio in fondo a `0011_multi_brand.sql`).
+3. Se serve un caricamento storico iniziale (come fatto per Cinquegrana con `Piano di carico - Vamart.csv`), usare `BRAND_CODICE=MASTERMOBILI node scripts/import-csv/bulkImportVamartCsv.mjs <file.csv>`.
+
+**Ancora da fare (non incluso in questa modifica):** la dashboard/monitor non distingue ancora visivamente i due brand (nessun badge/filtro colore), e l'intake email delle segnalazioni legge oggi una sola casella IMAP (quella di Cinquegrana) — se Master Mobili riceve le segnalazioni su una casella diversa, va deciso come instradarle prima di implementarlo.
+
 ## Documentazione completa
 
 Vedi la cartella `docs/` per: analisi funzionale (1), analisi tecnica e architettura (2), schema database (3), diagrammi di flusso (4), wireframe (5), esempi di automazioni (6), piano di sviluppo a milestone (7), piano evolutivo per l'integrazione API (8), guida allo scraper automatico (9).

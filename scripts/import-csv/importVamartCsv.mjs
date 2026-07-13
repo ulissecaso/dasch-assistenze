@@ -6,6 +6,12 @@
 //   (opzionale) ORIGINE_IMPORT=scraper_automatico ... per etichettare correttamente
 //   la sessione in importazioni_csv quando invocato dallo scraper automatico
 //   invece che a mano da terminale (default: "manuale").
+//   (opzionale) BRAND_CODICE=MASTERMOBILI ... per importare le pratiche di un
+//   brand diverso da Cinquegrana (default: CINQUEGRANA, invariato rispetto a
+//   prima). Cinquegrana e Master Mobili condividono lo stesso Vamart e lo
+//   stesso formato CSV: e' questo unico script, invocato due volte con
+//   BRAND_CODICE diverso, a gestire entrambi (vedi
+//   .github/workflows/scraper-vamart.yml).
 //
 // Il Piano di Carico esportato da Vamart contiene TUTTE le commissioni
 // (vendite normali comprese), non solo quelle di assistenza. Questo
@@ -54,6 +60,7 @@ if (PROXY_URL) {
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ORIGINE_IMPORT = process.env.ORIGINE_IMPORT || "manuale";
+const BRAND_CODICE = process.env.BRAND_CODICE || "CINQUEGRANA";
 
 const FASI_ASSISTENZA = [
   "ricezione",
@@ -130,6 +137,16 @@ async function main() {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+  const { data: brand, error: erroreBrand } = await supabase
+    .from("brands")
+    .select("id, nome")
+    .eq("codice", BRAND_CODICE)
+    .maybeSingle();
+  if (erroreBrand) throw erroreBrand;
+  if (!brand) throw new Error(`Brand '${BRAND_CODICE}' non trovato in brands (hai gia' applicato la migrazione 0011_multi_brand.sql?)`);
+  const brandId = brand.id;
+  console.log(`Brand: ${brand.nome} (${BRAND_CODICE})`);
+
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
     .select("id, codice")
@@ -151,7 +168,7 @@ async function main() {
 
   const { data: importazione, error: erroreImport } = await supabase
     .from("importazioni_csv")
-    .insert({ nome_file: percorsoFile.split("/").pop(), origine: ORIGINE_IMPORT, righe_totali: righe.length, stato: "in_corso" })
+    .insert({ nome_file: percorsoFile.split("/").pop(), origine: ORIGINE_IMPORT, righe_totali: righe.length, stato: "in_corso", brand_id: brandId })
     .select()
     .single();
   if (erroreImport) throw erroreImport;
@@ -165,7 +182,7 @@ async function main() {
   const mappaPraticheEsistenti = new Map();
   await Promise.all(
     inBlocchi(codiciCommissione).map(async (blocco) => {
-      const { data, error } = await supabase.from("pratiche").select("*").in("codice_commissione", blocco);
+      const { data, error } = await supabase.from("pratiche").select("*").eq("brand_id", brandId).in("codice_commissione", blocco);
       if (error) throw error;
       for (const p of data ?? []) mappaPraticheEsistenti.set(p.codice_commissione, p);
     })
@@ -228,7 +245,7 @@ async function main() {
   if (nomiClienti.length > 0) {
     await Promise.all(
       inBlocchi(nomiClienti).map(async (blocco) => {
-        const { data, error } = await supabase.from("clienti").select("id, nome_completo").in("nome_completo", blocco);
+        const { data, error } = await supabase.from("clienti").select("id, nome_completo").eq("brand_id", brandId).in("nome_completo", blocco);
         if (error) throw error;
         for (const c of data ?? []) mappaClienti.set(c.nome_completo, c.id);
       })
@@ -237,7 +254,7 @@ async function main() {
     if (clientiMancanti.length > 0) {
       await Promise.all(
         inBlocchi(clientiMancanti, 500).map(async (blocco) => {
-          const { data, error } = await supabase.from("clienti").insert(blocco.map((nome_completo) => ({ nome_completo }))).select("id, nome_completo");
+          const { data, error } = await supabase.from("clienti").insert(blocco.map((nome_completo) => ({ nome_completo, brand_id: brandId }))).select("id, nome_completo");
           if (error) throw error;
           for (const c of data ?? []) mappaClienti.set(c.nome_completo, c.id);
         })
@@ -312,6 +329,7 @@ async function main() {
       codice_commissione: p.codice_commissione,
       codice_commissione_riferimento: p.codice_commissione,
       cliente_id: mappaClienti.get(p.cliente),
+      brand_id: brandId,
       tipo: "consegna",
       categoria: p.categoria,
       canale_origine: "csv",
