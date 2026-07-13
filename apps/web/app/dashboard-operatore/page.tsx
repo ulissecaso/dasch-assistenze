@@ -8,6 +8,7 @@
 // scorrere con la rotella del mouse tutto il proprio elenco (anche centinaia
 // di pratiche), quindi passiamo a MonitorBoard il numero vero di righe
 // invece di un tetto fisso.
+import { redirect } from "next/navigation";
 import { richiediUtente } from "@/lib/auth/richiediUtente";
 import MonitorBoard, { type AlertRigaMonitor, type OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
 import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce } from "@/lib/monitor/mappature";
@@ -20,6 +21,17 @@ function oggiIso() {
 
 export default async function DashboardOperatorePage() {
   const { supabase, user } = await richiediUtente();
+
+  // Il supervisore non è mai "operatore_assegnato_id" di nessuna pratica (è un
+  // ruolo di sola visione, non di lavorazione): se qualcuno con questo ruolo
+  // arriva qui (link vecchio, URL digitato a mano, ecc.) la pagina sarebbe
+  // sempre vuota. Meglio rimandarlo subito a dove i suoi dati esistono
+  // davvero: il Monitoraggio Assistenze, filtrato sul suo brand via RLS.
+  const { data: profiloRuolo } = await supabase.from("utenti").select("ruolo").eq("id", user.id).maybeSingle();
+  if (profiloRuolo?.ruolo === "supervisore") {
+    redirect("/dashboard-direzione");
+  }
+
   const adesso = new Date().toISOString();
   const adessoMs = Date.now();
   const oggi = oggiIso();
