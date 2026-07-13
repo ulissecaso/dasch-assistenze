@@ -8,6 +8,7 @@ import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione 
 import { alternaAbilitazioneBrand } from "./brand-actions";
 import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratiche-actions";
 import UploadCsvForm from "@/components/admin/UploadCsvForm";
+import UploadCsvCommissioniForm from "@/components/admin/UploadCsvCommissioniForm";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
 
 export const dynamic = "force-dynamic";
@@ -243,6 +244,14 @@ export default async function AdminPage({
           non solo una volta — più spesso lo fai, più aggiornata resta la dashboard per gli operatori.
         </p>
         <UploadCsvForm />
+
+        <h3 className="text-sm font-medium mt-5 mb-1">Commissioni di assistenza</h3>
+        <p className="text-xs text-gray-400 mb-1">
+          Scarica dal filtro &quot;Solo di assistenza&quot; della pagina Commissioni di Vamart e caricalo qui: crea o
+          ricollega le pratiche di assistenza. In alternativa parte da solo ogni ora tramite lo scraper automatico.
+        </p>
+        <UploadCsvCommissioniForm />
+
         <table className="w-full text-sm mt-4">
           <thead><tr className="text-left text-gray-500"><th>File</th><th>Stato</th><th>Nuove</th><th>Aggiornate</th><th>Errori</th><th>Data</th></tr></thead>
           <tbody>
