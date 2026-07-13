@@ -401,7 +401,7 @@ export default async function AdminPage({
                     </button>
                   </form>
 
-                  {u.ruolo === "operatore" ? (
+                  {u.codice_accesso ? (
                     <form action={rigeneraCodiceOperatore}>
                       <input type="hidden" name="id" value={u.id} />
                       <button
@@ -458,9 +458,15 @@ export default async function AdminPage({
 
         <div className="grid gap-6 md:grid-cols-2">
           <details className="text-sm border rounded-lg p-3" open>
-            <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo operatore (accesso con codice)</summary>
+            <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo operatore/supervisore (accesso con codice)</summary>
             <form action={creaOperatore} className="mt-3 space-y-2">
-              <input type="hidden" name="ruolo" value="operatore" />
+              <label className="block">
+                <span className="block text-xs text-gray-500">Ruolo</span>
+                <select name="ruolo" defaultValue="operatore" className="w-full border rounded px-2 py-1">
+                  <option value="operatore">Operatore</option>
+                  <option value="supervisore">Supervisore (sola lettura, vede Monitoraggio Assistenze/Consegne di tutto il brand)</option>
+                </select>
+              </label>
               <label className="block">
                 <span className="block text-xs text-gray-500">Nome</span>
                 <input name="nome" required className="w-full border rounded px-2 py-1" />
@@ -470,10 +476,11 @@ export default async function AdminPage({
                 <input name="cognome" required className="w-full border rounded px-2 py-1" />
               </label>
               <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5">
-                Crea operatore
+                Crea
               </button>
               <p className="text-xs text-gray-400">
-                Genera un codice univoco (visibile dopo nella tabella sopra, "mostra codice") da consegnare all&apos;operatore: lo userà per accedere all&apos;app, senza bisogno di una sua email.
+                Genera un codice univoco (visibile dopo nella tabella sopra, "mostra codice") da consegnare alla persona: lo userà per accedere all&apos;app, senza bisogno di una sua email.
+                Dopo la creazione, ricordati di abilitare i "Brand abilitati" giusti nella tabella sopra: un supervisore senza brand abilitati non vedrà nessuna pratica.
               </p>
             </form>
           </details>
