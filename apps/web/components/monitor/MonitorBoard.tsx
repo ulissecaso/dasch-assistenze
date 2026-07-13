@@ -74,6 +74,14 @@ export default function MonitorBoard({
   // (es. dashboard-operatore, che mostra pratiche miste) non compare nessun
   // accento: resta l'aspetto neutro originale.
   variante,
+  // Elenco di TUTTI i brand attivi (es. dalla tabella `brands`), da passare
+  // quando si vuole che i pulsanti di filtro compaiano sempre - anche se in
+  // questo momento le righe visibili appartengono a un solo brand (es. un
+  // operatore che in questo istante ha in ritardo solo pratiche Cinquegrana,
+  // ma è abilitato anche su Master Mobili e vuole comunque poter filtrare).
+  // Se omesso, si torna al comportamento precedente: il filtro compare solo
+  // se le righe effettivamente presenti mescolano più brand.
+  brandsAttivi,
 }: {
   titolo: ReactNode;
   operatori: OperatoreCardMonitor[];
@@ -84,6 +92,7 @@ export default function MonitorBoard({
   righeMax?: number;
   righeCliccabili?: boolean;
   variante?: "assistenza" | "consegna";
+  brandsAttivi?: { codice: string; nome: string; colore: string }[];
 }) {
   const accento = variante === "consegna" ? "#f59e0b" : variante === "assistenza" ? "#6366f1" : null;
   const iconaModulo = variante === "consegna" ? "truck" : "headset";
@@ -94,11 +103,16 @@ export default function MonitorBoard({
   const boardRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  // Elenco dei brand realmente presenti nelle righe: il filtro compare solo
-  // se ce ne sono almeno due (altrimenti sarebbe un controllo inutile).
-  const brandsDisponibili = Array.from(
-    new Map(alertRows.filter((r) => r.brand).map((r) => [r.brand!.codice, r.brand!])).values()
-  );
+  // Elenco dei brand da offrire nel filtro: se il chiamante passa la lista
+  // completa dei brand attivi (brandsAttivi) la usiamo sempre, così i
+  // pulsanti compaiono anche quando in questo momento le righe visibili
+  // sono di un solo brand. Altrimenti si deriva dai brand realmente
+  // presenti nelle righe (comportamento precedente) e il filtro compare
+  // solo se ce ne sono almeno due (altrimenti sarebbe un controllo inutile).
+  const brandsDisponibili =
+    brandsAttivi && brandsAttivi.length > 0
+      ? brandsAttivi
+      : Array.from(new Map(alertRows.filter((r) => r.brand).map((r) => [r.brand!.codice, r.brand!])).values());
 
   useEffect(() => {
     const mesi = ["GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO", "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"];
