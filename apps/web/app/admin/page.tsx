@@ -562,4 +562,78 @@ function GrigliaSoglie({ fasi }: { fasi: RegolaFase[] }) {
           <CampoDurata
             label="Secondo Allert (soglia)"
             nomeGiorni="secondo_giorni"
-    
+            nomeOre="secondo_ore"
+            valore={separaGiorniOre(fase.secondo.soglia_valore, fase.secondo.soglia_unita)}
+          />
+          <CampoDurata
+            label="Ripeti ogni (allert periodico)"
+            nomeGiorni="intervallo_giorni"
+            nomeOre="intervallo_ore"
+            valore={separaGiorniOre(fase.periodico.ripeti_ogni_valore, fase.periodico.ripeti_ogni_unita)}
+          />
+          <label className="block text-sm">
+            <span className="text-gray-600">Numero massimo di solleciti prima dell&apos;escalation</span>
+            <input
+              type="number"
+              min={1}
+              name="tetto"
+              defaultValue={fase.periodico.ripeti_max_volte ?? 3}
+              className="mt-1 w-24 border rounded px-2 py-1"
+            />
+          </label>
+          {fase.escalation && (
+            <p className="text-xs text-gray-400">
+              Dopo il tetto: <span className="font-medium">{fase.escalation.nome}</span> (notifica {fase.escalation.destinatari_ruolo?.join(", ")})
+            </p>
+          )}
+
+          <button type="submit" className="mt-2 bg-gray-900 text-white text-sm rounded px-3 py-1.5">
+            Salva soglie
+          </button>
+        </form>
+      ))}
+    </div>
+  );
+}
+
+/** Coppia di campi numerici Giorni + Ore con etichetta, per i form delle soglie SLA. */
+function CampoDurata({
+  label,
+  nomeGiorni,
+  nomeOre,
+  valore,
+}: {
+  label: string;
+  nomeGiorni: string;
+  nomeOre: string;
+  valore: { giorni: number; ore: number };
+}) {
+  return (
+    <div className="text-sm">
+      <span className="text-gray-600">{label}</span>
+      <div className="flex gap-2 mt-1">
+        <label className="flex items-center gap-1">
+          <input
+            type="number"
+            min={0}
+            name={nomeGiorni}
+            defaultValue={valore.giorni}
+            className="w-16 border rounded px-2 py-1"
+          />
+          <span className="text-xs text-gray-500">giorni</span>
+        </label>
+        <label className="flex items-center gap-1">
+          <input
+            type="number"
+            min={0}
+            max={23}
+            name={nomeOre}
+            defaultValue={valore.ore}
+            className="w-16 border rounded px-2 py-1"
+          />
+          <span className="text-xs text-gray-500">ore</span>
+        </label>
+      </div>
+    </div>
+  );
+}
