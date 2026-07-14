@@ -30,7 +30,7 @@ export default async function MonitorConsegnePubblico({
   // Client con service role: nessuna sessione utente su questa pagina (vedi
   // stesso motivo in /monitor/direzione).
   const supabase = creaSupabaseClientAdmin();
-  const { alertRows, operatori, stats } = await caricaDatiConsegne(supabase);
+  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiConsegne(supabase);
 
   return (
     <div className="h-screen overflow-hidden p-3" style={{ background: "#0a0e16" }}>
@@ -43,6 +43,7 @@ export default async function MonitorConsegnePubblico({
         messaggioVuoto="Nessun alert al momento: tutte le consegne sono in linea con le scadenze."
         righeCliccabili={false}
         variante="consegna"
+        avvisiImportazione={avvisiImportazione}
       />
     </div>
   );

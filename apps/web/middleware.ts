@@ -1,6 +1,13 @@
 // middleware.ts
 // Protezione delle rotte per ruolo. Gira prima di ogni richiesta (Edge runtime).
-//  - /admin, /dashboard-direzione: solo admin/responsabile
+//  - /admin: solo admin/responsabile (pannello di modifica, mai al supervisore)
+//  - /dashboard-direzione, /dashboard-direzione-consegne: admin/responsabile/
+//    supervisore (sola lettura, filtrata per brand via RLS - vedi
+//    richiediVisioneDirezione in lib/auth/richiediUtente.ts e
+//    0013_ruolo_supervisore.sql). ATTENZIONE: questo elenco deve restare
+//    allineato con quello dentro richiediVisioneDirezione, altrimenti si
+//    creano loop di redirect (bloccato qui ma riammesso dalla pagina, o
+//    viceversa).
 //  - /dashboard-operatore, /pratiche: qualsiasi utente autenticato
 //  - /login/*, /api/*, /monitor/*: sempre pubblici. /monitor/* è la vista di
 //    sola lettura per il monitor a parete: NON deve mai passare da una
@@ -10,7 +17,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-const ROTTE_SOLO_ADMIN = ["/admin", "/dashboard-direzione", "/dashboard-direzione-consegne"];
+const ROTTE_SOLO_ADMIN = ["/admin"];
+const ROTTE_DIREZIONE = ["/dashboard-direzione", "/dashboard-direzione-consegne"];
 const ROTTE_AUTENTICATE = ["/dashboard-operatore", "/pratiche"];
 
 // Propaga il pathname come header interno: serve al layout radice per
@@ -32,11 +40,16 @@ export async function middleware(request: NextRequest) {
   if (pubblica) return conPathname(request, NextResponse.next());
 
   const richiedeSoloAdmin = ROTTE_SOLO_ADMIN.some((r) => pathname.startsWith(r));
-  const richiedeAutenticazione = richiedeSoloAdmin || ROTTE_AUTENTICATE.some((r) => pathname.startsWith(r));
+  const richiedeDirezione = ROTTE_DIREZIONE.some((r) => pathname.startsWith(r));
+  const richiedeAutenticazione = richiedeSoloAdmin || richiedeDirezione || ROTTE_AUTENTICATE.some((r) => pathname.startsWith(r));
 
   if (!richiedeAutenticazione) return conPathname(request, NextResponse.next());
 
   let response = conPathname(request, NextResponse.next({ request: { headers: request.headers } }));
+  // /admin resta riservato ad admin/responsabile (email+password), quindi va
+  // a /login/admin. Le rotte di direzione le può usare anche il supervisore
+  // (accesso con codice come un operatore): di default rimandiamo a
+  // /login/operatore, che ha comunque il link "Sei l'amministratore?".
   const destinazioneLogin = richiedeSoloAdmin ? "/login/admin" : "/login/operatore";
 
   try {
@@ -72,6 +85,13 @@ export async function middleware(request: NextRequest) {
     if (richiedeSoloAdmin) {
       const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", user.id).maybeSingle();
       if (!profilo || !["admin", "responsabile"].includes(profilo.ruolo)) {
+        return NextResponse.redirect(new URL("/dashboard-operatore", request.url));
+      }
+    }
+
+    if (richiedeDirezione) {
+      const { data: profilo } = await supabase.from("utenti").select("ruolo").eq("id", user.id).maybeSingle();
+      if (!profilo || !["admin", "responsabile", "supervisore"].includes(profilo.ruolo)) {
         return NextResponse.redirect(new URL("/dashboard-operatore", request.url));
       }
     }

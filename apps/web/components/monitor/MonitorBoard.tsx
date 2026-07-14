@@ -48,6 +48,13 @@ export type StatsMonitor = {
   praticheTotali: number;
 };
 
+export type AvvisoImportazioneMonitor = {
+  tipo: "csv" | "email";
+  messaggio: string;
+  dettaglio: string;
+  quando: string;
+};
+
 const VELOCITA_PULSE: Record<string, string> = {
   critica: "0.9s", alta: "1.5s", media: "2.2s", bassa: "3s",
 };
@@ -82,6 +89,13 @@ export default function MonitorBoard({
   // Se omesso, si torna al comportamento precedente: il filtro compare solo
   // se le righe effettivamente presenti mescolano più brand.
   brandsAttivi,
+  // Avvisi su problemi di alimentazione dati (import CSV Vamart o email di
+  // segnalazione andati in errore di recente): un banner ben visibile in
+  // cima alla board, cosi' chi guarda il monitor a parete se ne accorge
+  // subito e puo' avvisare l'amministratore, invece di scoprirlo solo
+  // quando manca "a occhio" una pratica attesa. Vuoto/omesso = nessun
+  // problema noto, nessun banner.
+  avvisiImportazione = [],
 }: {
   titolo: ReactNode;
   operatori: OperatoreCardMonitor[];
@@ -93,6 +107,7 @@ export default function MonitorBoard({
   righeCliccabili?: boolean;
   variante?: "assistenza" | "consegna";
   brandsAttivi?: { codice: string; nome: string; colore: string }[];
+  avvisiImportazione?: AvvisoImportazioneMonitor[];
 }) {
   const accento = variante === "consegna" ? "#f59e0b" : variante === "assistenza" ? "#6366f1" : null;
   const iconaModulo = variante === "consegna" ? "truck" : "headset";
@@ -164,6 +179,22 @@ export default function MonitorBoard({
             <Icona nome="filter" className="ic" /> {soloUrgenti ? "Mostra tutti" : "Mostra solo urgenti"}
           </div>
         </div>
+
+        {avvisiImportazione.length > 0 && (
+          <div className="mon-import-alert">
+            <Icona nome="warning" className="ic" />
+            <div className="mon-import-alert-testo">
+              {avvisiImportazione.map((a, i) => (
+                <div key={i} className="mon-import-alert-riga">
+                  <strong>{a.tipo === "csv" ? "Import CSV Vamart" : "Segnalazione email"}:</strong> {a.messaggio}
+                  {a.dettaglio && <span className="mon-import-alert-dettaglio"> — {a.dettaglio}</span>}
+                  <span className="mon-import-alert-quando"> ({a.quando})</span>
+                </div>
+              ))}
+            </div>
+            <span className="mon-import-alert-cta">Contattare l&apos;amministratore</span>
+          </div>
+        )}
 
         {brandsDisponibili.length > 1 && (
           <div className="mon-brand-row">
@@ -305,6 +336,13 @@ const CSS = `
 .op-urgent{font-size:14px;font-weight:800;white-space:nowrap;}
 .mon-filter{background:#131a26;border:1px solid #2a3242;color:#cbd5e1;border-radius:8px;padding:5px 9px;font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0;}
 .mon-filter .ic{width:13px;height:13px;color:#cbd5e1;}
+.mon-import-alert{flex:0 0 auto;display:flex;align-items:center;gap:10px;background:#3a2410;border:1.5px solid #fb923c;color:#fed7aa;border-radius:10px;padding:8px 14px;margin-bottom:8px;font-size:13px;}
+.mon-import-alert>.ic{width:20px;height:20px;color:#fb923c;flex-shrink:0;}
+.mon-import-alert-testo{flex:1 1 auto;display:flex;flex-direction:column;gap:2px;}
+.mon-import-alert-riga strong{color:#fff;}
+.mon-import-alert-dettaglio{color:#fdba74;}
+.mon-import-alert-quando{color:#c8a06a;font-size:12px;}
+.mon-import-alert-cta{flex-shrink:0;background:#fb923c;color:#241304;font-weight:700;font-size:12px;border-radius:999px;padding:5px 12px;white-space:nowrap;}
 .mon-brand-row{flex:0 0 auto;display:flex;gap:8px;margin-bottom:8px;}
 .mon-brand-chip{background:#131a26;border:1.5px solid #2a3242;color:#cbd5e1;border-radius:999px;padding:4px 12px;font-size:12.5px;font-weight:600;cursor:pointer;}
 .mon-brand-chip.attivo{color:#0a0e16;}

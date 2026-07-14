@@ -33,7 +33,7 @@ export default async function MonitorDirezionePubblico({
   // login su questa pagina), quindi serve un client che bypassa le RLS per
   // poter comunque leggere i dati aggregati da mostrare sul monitor.
   const supabase = creaSupabaseClientAdmin();
-  const { alertRows, operatori, stats } = await caricaDatiDirezione(supabase);
+  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiDirezione(supabase);
 
   return (
     <div className="h-screen overflow-hidden p-3" style={{ background: "#0a0e16" }}>
@@ -47,6 +47,7 @@ export default async function MonitorDirezionePubblico({
         // portale (vedi commento in cima a questo file).
         righeCliccabili={false}
         variante="assistenza"
+        avvisiImportazione={avvisiImportazione}
       />
     </div>
   );
