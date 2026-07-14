@@ -30,3 +30,26 @@ export async function alternaAbilitazioneBrand(formData: FormData) {
 
   revalidatePath("/admin");
 }
+
+/**
+ * Abilita/disabilita, per un intero brand, se una pratica di Assistenza deve
+ * aspettare anche "Consegna materiale" prima di potersi chiudere (vedi
+ * 0014_richiede_consegna_brand.sql). Default true (comportamento storico)
+ * per Cinquegrana e Master Mobili: un brand che non traccia una consegna a
+ * parte (es. ritiro diretto in negozio) puo' disattivarlo, cosi' la pratica
+ * si chiude gia' quando il materiale risulta arrivato in deposito.
+ */
+export async function alternaRichiedeConsegnaBrand(formData: FormData) {
+  const brandId = String(formData.get("brand_id") ?? "");
+  const nuovoStato = formData.get("nuovo_stato") === "true";
+  if (!brandId) throw new Error("brand_id obbligatorio");
+
+  const supabase = creaSupabaseClientAdmin();
+  const { error } = await supabase
+    .from("brands")
+    .update({ richiede_consegna_assistenza: nuovoStato })
+    .eq("id", brandId);
+  if (error) throw error;
+
+  revalidatePath("/admin");
+}
