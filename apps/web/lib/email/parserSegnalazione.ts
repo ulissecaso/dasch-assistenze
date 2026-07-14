@@ -90,6 +90,18 @@ function estraiFormatoApp(oggetto: string, corpo: string): SegnalazioneEstratta 
 
 // Etichette nell'ordine in cui compaiono nella mail del sito. Servono per
 // sapere dove finisce il valore di un campo (= dove inizia il successivo).
+//
+// ATTENZIONE al formato reale (Gravity Forms/WordPress): a differenza di
+// quanto assunto inizialmente, etichetta e valore NON stanno sempre su righe
+// separate. La mail vera arriva come:
+//   "Nome e cognome [] Verazzo Costantino Numero di telefono
+//    3477925660 Indirizzo e-mail [] Ste.arrichiello96@libero. It Numero di
+//    commissione\n[] 1005/22 Descrizione del problema [] Ho avuto..."
+// cioè: un'icona (convertita in testo come "[]" dalla conversione HTML->testo)
+// subito dopo l'etichetta, poi il valore, poi SUBITO l'etichetta successiva
+// sulla stessa riga (gli "a capo" sono solo artefatti di word-wrap, non
+// separatori di campo). Il parser deve quindi tollerare zero o più spazi/a
+// capo intorno a un "[]" opzionale, non richiedere un "\n" vero.
 const ETICHETTE_SITO = [
   "Nome e cognome",
   "Numero di telefono",
@@ -98,29 +110,48 @@ const ETICHETTE_SITO = [
   "Descrizione del problema",
 ] as const;
 
+// Non è un campo che salviamo, ma serve come confine per sapere dove finisce
+// il valore di "Descrizione del problema" (l'ultima etichetta reale): senza
+// di esso la descrizione "assorbirebbe" anche l'elenco dei file allegati che
+// segue nella mail.
+const CONFINE_FINALE_SITO = "Allegati";
+
 function estraiCampoSito(corpo: string, etichetta: string, prossimeEtichette: string[]): string | null {
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const alternanza = prossimeEtichette.map(escape).join("|");
   const pattern = new RegExp(
-    escape(etichetta) + "\\s*\\n+([\\s\\S]*?)(?=\\n\\s*(?:" + (alternanza || "$^") + ")\\s*\\n|$)",
+    escape(etichetta) +
+      "\\s*(?:\\[\\]\\s*)?" + // icona opzionale dopo l'etichetta (vedi commento sopra)
+      "([\\s\\S]*?)" +
+      "(?=\\s*(?:" + (alternanza || "$^") + ")|$)",
     "i"
   );
   const m = corpo.match(pattern);
   return pulisci(m?.[1] ?? null);
 }
 
+// Ricompone un indirizzo email che la conversione HTML->testo di alcuni
+// client può spezzare (es. "nome@dominio. It" invece di "nome@dominio.it",
+// con uno spazio spurio e la "i" maiuscolata): rimuove tutti gli spazi
+// interni e riporta tutto minuscolo.
+function normalizzaEmail(testo: string | null): string | null {
+  const v = pulisci(testo);
+  if (!v) return null;
+  return v.replace(/\s+/g, "").toLowerCase();
+}
+
 function estraiFormatoSito(corpo: string): SegnalazioneEstratta {
   const valori: Record<string, string | null> = {};
   ETICHETTE_SITO.forEach((etichetta, i) => {
-    const successive = ETICHETTE_SITO.slice(i + 1);
-    valori[etichetta] = estraiCampoSito(corpo, etichetta, [...successive]);
+    const successive = [...ETICHETTE_SITO.slice(i + 1), CONFINE_FINALE_SITO];
+    valori[etichetta] = estraiCampoSito(corpo, etichetta, successive);
   });
 
   return {
     formato: "sito",
     nome: valori["Nome e cognome"],
     telefono: valori["Numero di telefono"],
-    email: valori["Indirizzo e-mail"],
+    email: normalizzaEmail(valori["Indirizzo e-mail"]),
     commissione: normalizzaCommissione(valori["Numero di commissione"]),
     tipoProblema: null,
     descrizione: valori["Descrizione del problema"],
