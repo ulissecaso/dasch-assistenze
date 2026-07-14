@@ -185,7 +185,16 @@ jobs:
   # impostato fallirebbe al primo step con un errore di login su URL vuoto.
   scrape-e-importa-febal:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 45 min (invece dei 15 di Cinquegrana/Master Mobili): la PRIMISSIMA
+    # importazione di un brand nuovo deve creare da zero una pratica alla
+    # volta per ogni commissione storica (importCommissioniAssistenza.mjs
+    # elabora le righe in sequenza, una query alla volta), quindi con ~750
+    # righe puo' superare abbondantemente i 15 minuti. Le esecuzioni
+    # successive troveranno quasi tutto gia' presente (fast-path "gia'
+    # presenti") e torneranno rapide: se in futuro resta lento anche a
+    # regime, andra' ottimizzato lo script stesso (query in blocco/parallele,
+    # come gia' fatto in importVamartCsv.mjs), non solo il timeout.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
