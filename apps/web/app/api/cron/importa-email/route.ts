@@ -6,19 +6,23 @@
 // identificato dal suo Message-ID, salvato in importazioni_email, così ri-
 // eseguire il job non genera doppioni.
 //
-// Variabili d'ambiente richieste (da impostare su Vercel):
-//   IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASSWORD, CRON_SECRET
+// MULTI-BRAND: ogni brand puo' avere una propria casella IMAP. Il brand da
+// leggere si passa come querystring (?brand=CODICE) nel path configurato in
+// vercel.json - un cron entry per brand, stessa route. Se omesso, default
+// CINQUEGRANA (comportamento storico, invariato).
 //
-// MULTI-BRAND — PUNTO APERTO: questo cron legge UNA SOLA casella IMAP, oggi
-// quella di Cinquegrana (servizioclienti@arredamenticinquegrana.it). Tutte
-// le segnalazioni ricevute vengono quindi etichettate come Cinquegrana (vedi
-// BRAND_CODICE_DEFAULT sotto). Se Master Mobili avra' una propria casella di
-// segnalazioni, le opzioni sono: (a) una seconda variabile IMAP_*_MASTERMOBILI
-// e un secondo cron separato che chiama questa stessa logica con l'altro
-// brandId, oppure (b) se useranno la STESSA casella, riconoscere il brand dal
-// destinatario del messaggio (envelope.to) invece che da una casella dedicata.
-// Nessuna delle due e' stata implementata qui: serve sapere come Master
-// Mobili riceve le segnalazioni prima di scegliere.
+// Variabili d'ambiente richieste (da impostare su Vercel):
+//   Cinquegrana (nomi storici, INVARIATI): IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASSWORD
+//   Qualsiasi altro brand: stesso nome con suffisso _<CODICE_BRAND>, es. per
+//     FEBAL: IMAP_HOST_FEBAL, IMAP_PORT_FEBAL, IMAP_USER_FEBAL, IMAP_PASSWORD_FEBAL
+//   Comune a tutti i brand: CRON_SECRET
+//
+// ATTENZIONE: il parser (lib/email/parserSegnalazione.ts) oggi riconosce solo
+// i due formati di Cinquegrana ("app" e "sito" Gravity Forms). Un nuovo brand
+// con un template email diverso andra' quasi certamente in esito 'errore'
+// finche' non si aggiunge un terzo ramo "formato" basato su un'email vera
+// ricevuta da quella casella (stesso lavoro fatto per il bug del formato
+// "sito" di Cinquegrana).
 const BRAND_CODICE_DEFAULT = "CINQUEGRANA";
 import { NextResponse } from "next/server";
 import { ImapFlow } from "imapflow";
@@ -41,12 +45,18 @@ export async function GET(req: Request) {
     return NextResponse.json({ errore: "non autorizzato" }, { status: 401 });
   }
 
-  const host = process.env.IMAP_HOST;
-  const port = Number(process.env.IMAP_PORT ?? 993);
-  const user = process.env.IMAP_USER;
-  const password = process.env.IMAP_PASSWORD;
+  const { searchParams } = new URL(req.url);
+  const brandCodice = (searchParams.get("brand") ?? BRAND_CODICE_DEFAULT).toUpperCase();
+  // Cinquegrana mantiene i nomi storici delle variabili (nessuna migrazione
+  // di configurazione necessaria); ogni altro brand usa lo stesso nome con
+  // suffisso _<CODICE>.
+  const suffisso = brandCodice === BRAND_CODICE_DEFAULT ? "" : `_${brandCodice}`;
+  const host = process.env[`IMAP_HOST${suffisso}`];
+  const port = Number(process.env[`IMAP_PORT${suffisso}`] ?? 993);
+  const user = process.env[`IMAP_USER${suffisso}`];
+  const password = process.env[`IMAP_PASSWORD${suffisso}`];
   if (!host || !user || !password) {
-    return NextResponse.json({ errore: "variabili IMAP non configurate" }, { status: 500 });
+    return NextResponse.json({ errore: `variabili IMAP non configurate per il brand '${brandCodice}' (attese IMAP_HOST${suffisso}/IMAP_USER${suffisso}/IMAP_PASSWORD${suffisso})` }, { status: 500 });
   }
 
   const supabase = creaSupabaseClientAdmin();
@@ -54,10 +64,10 @@ export async function GET(req: Request) {
   const { data: brand, error: erroreBrand } = await supabase
     .from("brands")
     .select("id")
-    .eq("codice", BRAND_CODICE_DEFAULT)
+    .eq("codice", brandCodice)
     .maybeSingle();
   if (erroreBrand || !brand) {
-    return NextResponse.json({ errore: `brand '${BRAND_CODICE_DEFAULT}' non trovato (migrazione 0011 applicata?)` }, { status: 500 });
+    return NextResponse.json({ errore: `brand '${brandCodice}' non trovato (migrazione 0011 applicata?)` }, { status: 500 });
   }
   const brandId = brand.id as string;
 
