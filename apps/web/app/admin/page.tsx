@@ -96,6 +96,7 @@ export default async function AdminPage({
     { data: regoleAssegnazione, error: erroreRegoleAssegnazione },
     { data: regoleAlert, error: erroreRegoleAlert },
     { data: importazioni, error: erroreImportazioni },
+    { data: importazioniEmail, error: erroreImportazioniEmail },
     { data: pratiche, error: errorePratiche },
     { data: brands, error: erroreBrands },
     { data: operatoreBrand, error: erroreOperatoreBrand },
@@ -104,6 +105,7 @@ export default async function AdminPage({
     supabase.from("regole_assegnazione").select("*, utenti(nome, cognome)").order("priorita"),
     supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine, tipo_pratica)").eq("attiva", true),
     supabase.from("importazioni_csv").select("*").order("iniziata_il", { ascending: false }).limit(20),
+    supabase.from("importazioni_email").select("*").order("created_at", { ascending: false }).limit(20),
     queryPratiche,
     supabase.from("brands").select("*").order("nome"),
     supabase.from("operatore_brand").select("operatore_id, brand_id, attivo"),
@@ -114,6 +116,7 @@ export default async function AdminPage({
     erroreRegoleAssegnazione && `regole_assegnazione: ${erroreRegoleAssegnazione.message}`,
     erroreRegoleAlert && `regole_alert: ${erroreRegoleAlert.message}`,
     erroreImportazioni && `importazioni_csv: ${erroreImportazioni.message}`,
+    erroreImportazioniEmail && `importazioni_email: ${erroreImportazioniEmail.message}`,
     errorePratiche && `pratiche: ${errorePratiche.message}`,
     erroreBrands && `brands: ${erroreBrands.message}`,
     erroreOperatoreBrand && `operatore_brand: ${erroreOperatoreBrand.message}`,
@@ -265,6 +268,30 @@ export default async function AdminPage({
                 <td>{new Date(i.iniziata_il).toLocaleString("it-IT")}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+
+        <h3 className="text-sm font-medium mt-6 mb-1">Segnalazioni ricevute via email</h3>
+        <p className="text-xs text-gray-400 mb-1">
+          Log di ogni mail letta automaticamente dalla casella segnalazioni (una volta al giorno). Se una riga è in errore, la
+          pratica NON è stata creata/aggiornata: stessi errori compaiono come avviso sul Monitoraggio Assistenze/Consegne finché
+          sono recenti (ultimi 3 giorni).
+        </p>
+        <table className="w-full text-sm mt-2">
+          <thead><tr className="text-left text-gray-500"><th>Oggetto</th><th>Mittente</th><th>Esito</th><th>Errore</th><th>Ricevuta il</th></tr></thead>
+          <tbody>
+            {(importazioniEmail ?? []).map((e: any) => (
+              <tr key={e.id} className="border-t">
+                <td className="py-1">{e.oggetto ?? "—"}</td>
+                <td className="text-gray-500">{e.mittente ?? "—"}</td>
+                <td className={e.esito === "errore" ? "text-red-600 font-medium" : ""}>{e.esito}</td>
+                <td className="text-red-600">{e.messaggio_errore ?? ""}</td>
+                <td>{e.ricevuta_il ? new Date(e.ricevuta_il).toLocaleString("it-IT") : (e.created_at ? new Date(e.created_at).toLocaleString("it-IT") : "—")}</td>
+              </tr>
+            ))}
+            {(importazioniEmail ?? []).length === 0 && (
+              <tr><td colSpan={5} className="py-2 text-gray-400">Nessuna segnalazione email ricevuta ancora.</td></tr>
+            )}
           </tbody>
         </table>
       </section>
