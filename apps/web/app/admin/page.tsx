@@ -5,7 +5,7 @@ import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore, eliminaOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
-import { alternaAbilitazioneBrand } from "./brand-actions";
+import { alternaAbilitazioneBrand, alternaRichiedeConsegnaBrand } from "./brand-actions";
 import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratiche-actions";
 import UploadCsvForm from "@/components/admin/UploadCsvForm";
 import UploadCsvCommissioniForm from "@/components/admin/UploadCsvCommissioniForm";
@@ -205,6 +205,48 @@ export default async function AdminPage({
           Il criterio è sempre "iniziale del cognome del cliente": la pratica va all&apos;operatore la cui regola copre quella lettera.
           Le modifiche si applicano immediatamente alle nuove pratiche.
         </p>
+      </section>
+
+      <section className="bg-white rounded-xl shadow p-4">
+        <h2 className="text-lg font-medium mb-1">Brand</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Per ogni brand, scegli se una pratica di Assistenza deve aspettare anche la fase &quot;Consegna materiale&quot; prima di
+          potersi chiudere (comportamento storico, attivo di default), oppure se si chiude già quando il materiale risulta
+          arrivato in deposito — utile per un brand che non traccia una consegna separata (es. ritiro diretto in negozio).
+          Non tocca il modulo Consegne (le commissioni normali), che resta sempre presente per tutti i brand.
+        </p>
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-gray-500"><th>Brand</th><th>Consegna richiesta per chiudere l&apos;assistenza</th></tr></thead>
+          <tbody>
+            {(brands ?? []).map((b: any) => (
+              <tr key={b.id} className="border-t">
+                <td className="py-1.5">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: b.colore }} />
+                    {b.nome}
+                  </span>
+                </td>
+                <td>
+                  <form action={alternaRichiedeConsegnaBrand}>
+                    <input type="hidden" name="brand_id" value={b.id} />
+                    <input type="hidden" name="nuovo_stato" value={(!b.richiede_consegna_assistenza).toString()} />
+                    <button
+                      type="submit"
+                      className={`text-xs font-medium rounded-full px-3 py-1 border ${
+                        b.richiede_consegna_assistenza
+                          ? "bg-gray-900 text-white border-gray-900"
+                          : "text-gray-500 border-gray-300"
+                      }`}
+                      title={b.richiede_consegna_assistenza ? "Clicca per NON richiedere più la consegna" : "Clicca per richiedere di nuovo la consegna"}
+                    >
+                      {b.richiede_consegna_assistenza ? "Sì, richiesta" : "No, si chiude prima"}
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <section className="bg-white rounded-xl shadow p-4">
