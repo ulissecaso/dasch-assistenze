@@ -17,6 +17,7 @@
 //     consegna ancora aperte, e mostrato con livello fisso "media".
 import type { AlertRigaMonitor, OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
 import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo } from "@/lib/monitor/mappature";
+import { caricaAvvisiImportazione } from "@/lib/monitor/caricaAvvisiImportazione";
 
 const FASI_CONSEGNA = ["pianificazione_consegna", "pagamento"];
 const SOGLIA_CONSEGNA_PARZIALE = 80;
@@ -216,6 +217,11 @@ export async function caricaDatiConsegne(supabase: any) {
   const scaduti = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
   const inScadenzaOggi = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
+  // Avvisi su problemi di alimentazione dati (import CSV Vamart o email di
+  // segnalazione): uguali per Assistenza e Consegne, e' la stessa fonte dati
+  // per entrambi i moduli - vedi lib/monitor/caricaAvvisiImportazione.ts.
+  const avvisiImportazione = await caricaAvvisiImportazione(supabase);
+
   return {
     alertRows,
     operatori,
@@ -227,5 +233,6 @@ export async function caricaDatiConsegne(supabase: any) {
       risoltiOggi: risoltiOggi ?? 0,
       praticheTotali: praticheTotali ?? 0,
     },
+    avvisiImportazione,
   };
 }
