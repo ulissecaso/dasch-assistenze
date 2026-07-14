@@ -7,6 +7,7 @@
 // un'unica fonte di verità.
 import type { AlertRigaMonitor, OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
 import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce } from "@/lib/monitor/mappature";
+import { caricaAvvisiImportazione } from "@/lib/monitor/caricaAvvisiImportazione";
 
 function oggiIso() {
   return new Date().toISOString().slice(0, 10);
@@ -166,6 +167,10 @@ export async function caricaDatiDirezione(supabase: any) {
   const scaduti = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
   const inScadenzaOggi = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
+  // Avvisi su problemi di alimentazione dati (import CSV Vamart o email di
+  // segnalazione): vedi lib/monitor/caricaAvvisiImportazione.ts.
+  const avvisiImportazione = await caricaAvvisiImportazione(supabase);
+
   return {
     alertRows,
     operatori,
@@ -177,5 +182,6 @@ export async function caricaDatiDirezione(supabase: any) {
       risoltiOggi: risoltiOggi ?? 0,
       praticheTotali: praticheTotali ?? 0,
     },
+    avvisiImportazione,
   };
 }
