@@ -5,7 +5,7 @@ import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
 import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore, eliminaOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
-import { alternaAbilitazioneBrand, alternaRichiedeConsegnaBrand } from "./brand-actions";
+import { alternaAbilitazioneBrand, alternaRichiedeConsegnaBrand, creaBrand } from "./brand-actions";
 import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratiche-actions";
 import UploadCsvForm from "@/components/admin/UploadCsvForm";
 import UploadCsvCommissioniForm from "@/components/admin/UploadCsvCommissioniForm";
@@ -102,7 +102,7 @@ export default async function AdminPage({
     { data: operatoreBrand, error: erroreOperatoreBrand },
   ] = await Promise.all([
     supabase.from("utenti").select("*").order("cognome"),
-    supabase.from("regole_assegnazione").select("*, utenti(nome, cognome)").order("priorita"),
+    supabase.from("regole_assegnazione").select("*, utenti(nome, cognome), brands(nome, colore)").order("priorita"),
     supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine, tipo_pratica)").eq("attiva", true),
     supabase.from("importazioni_csv").select("*").order("iniziata_il", { ascending: false }).limit(20),
     supabase.from("importazioni_email").select("*").order("created_at", { ascending: false }).limit(20),
@@ -196,6 +196,15 @@ export default async function AdminPage({
               <span className="block text-xs text-gray-500">Priorità</span>
               <input type="number" name="priorita" defaultValue={100} className="w-full border rounded px-2 py-1" />
             </label>
+            <label className="md:col-span-2">
+              <span className="block text-xs text-gray-500">Brand</span>
+              <select name="brand_id" className="w-full border rounded px-2 py-1">
+                <option value="">Tutti i brand</option>
+                {(brands ?? []).map((b: any) => (
+                  <option key={b.id} value={b.id}>{b.nome}</option>
+                ))}
+              </select>
+            </label>
             <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5 md:col-span-1">
               Crea regola
             </button>
@@ -203,7 +212,9 @@ export default async function AdminPage({
         </details>
         <p className="text-xs text-gray-400 mt-3">
           Il criterio è sempre "iniziale del cognome del cliente": la pratica va all&apos;operatore la cui regola copre quella lettera.
-          Le modifiche si applicano immediatamente alle nuove pratiche.
+          Le modifiche si applicano immediatamente alle nuove pratiche. Scegli un brand specifico quando l&apos;operatore lavora
+          solo per quel brand (es. un nuovo brand con operatori propri): lasciare "Tutti i brand" farebbe valere la regola
+          anche per Cinquegrana/Master Mobili.
         </p>
       </section>
 
@@ -247,6 +258,32 @@ export default async function AdminPage({
             ))}
           </tbody>
         </table>
+
+        <details className="text-sm border rounded-lg p-3 mt-4">
+          <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo brand</summary>
+          <form action={creaBrand} className="mt-3 grid gap-3 md:grid-cols-4 items-end max-w-2xl">
+            <label>
+              <span className="block text-xs text-gray-500">Codice</span>
+              <input name="codice" required placeholder="FEBAL" className="w-full border rounded px-2 py-1 uppercase" />
+            </label>
+            <label className="md:col-span-2">
+              <span className="block text-xs text-gray-500">Nome</span>
+              <input name="nome" required placeholder="Febal" className="w-full border rounded px-2 py-1" />
+            </label>
+            <label>
+              <span className="block text-xs text-gray-500">Colore badge</span>
+              <input type="color" name="colore" defaultValue="#6366f1" className="w-full border rounded px-1 py-1 h-9" />
+            </label>
+            <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5 md:col-span-1">
+              Crea brand
+            </button>
+          </form>
+          <p className="text-xs text-gray-400 mt-2">
+            Il codice va in maiuscolo (es. "FEBAL") ed è quello da usare come BRAND_CODICE nello scraper Vamart e come
+            <code className="mx-1">?brand=</code> nel cron delle email. Dopo la creazione: abilita gli operatori giusti su questo
+            brand nella tabella "Operatori e utenti" più sotto, e crea le regole di assegnazione specifiche per questo brand.
+          </p>
+        </details>
       </section>
 
       <section className="bg-white rounded-xl shadow p-4">
@@ -598,7 +635,7 @@ export default async function AdminPage({
 function TabellaRegole({ regole }: { regole: any[] }) {
   return (
     <table className="w-full text-sm mb-4">
-      <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
+      <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Brand</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
       <tbody>
         {regole.map((r: any) => (
           <tr key={r.id} className="border-t">
@@ -606,6 +643,16 @@ function TabellaRegole({ regole }: { regole: any[] }) {
             <td>{r.criterio}</td>
             <td>{r.valore_da} - {r.valore_a}</td>
             <td>{r.utenti?.nome} {r.utenti?.cognome}</td>
+            <td>
+              {r.brands ? (
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: r.brands.colore }}>
+                  <span className="w-2 h-2 rounded-full inline-block" style={{ background: r.brands.colore }} />
+                  {r.brands.nome}
+                </span>
+              ) : (
+                <span className="text-xs text-gray-400">Tutti i brand</span>
+              )}
+            </td>
             <td>{r.priorita}</td>
             <td>{r.attiva ? "Sì" : "No"}</td>
             <td className="flex gap-3 py-1">
@@ -626,7 +673,7 @@ function TabellaRegole({ regole }: { regole: any[] }) {
           </tr>
         ))}
         {regole.length === 0 && (
-          <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
+          <tr><td colSpan={8} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
         )}
       </tbody>
     </table>
