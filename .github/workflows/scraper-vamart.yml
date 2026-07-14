@@ -22,16 +22,19 @@ name: scraper-vamart
 #   VAMART_URL                  URL della pagina di login di Vamart (Cinquegrana)
 #   VAMART_URL_MASTERMOBILI     URL della pagina di login di Vamart (Master Mobili),
 #                                oggi https://mastermobili20250616103641.azurewebsites.net/Account/Login
-#   VAMART_USER                 utente di login Vamart (STESSO per entrambi i brand)
-#   VAMART_PASS                 password di login Vamart (STESSA per entrambi i brand)
+#   VAMART_URL_FEBAL            URL della pagina di login di Vamart (Febal), da impostare
+#                                quando il brand Febal viene creato (vedi job in fondo)
+#   VAMART_USER                 utente di login Vamart (condiviso, salvo dove specificato)
+#   VAMART_PASS                 password di login Vamart (condivisa, salvo dove specificato)
 #   SUPABASE_URL                stesso valore di SUPABASE_URL usato dall'app
 #   SUPABASE_SERVICE_ROLE_KEY   service role key di Supabase (mai la anon key)
 #
-# Due job separati (uno per brand), stesso codice: il modulo di importazione
-# non cambia tra i due, cambiano solo l'URL Vamart e il BRAND_CODICE passato
-# agli script di import (vedi scripts/import-csv/*.mjs). Se in futuro Master
-# Mobili avesse credenziali proprie, basta aggiungere VAMART_USER_MASTERMOBILI
-# / VAMART_PASS_MASTERMOBILI e usarli al posto di quelli condivisi qui sotto.
+# Un job per brand, stesso codice: il modulo di importazione non cambia tra
+# un brand e l'altro, cambiano solo l'URL Vamart e il BRAND_CODICE passato
+# agli script di import (vedi scripts/import-csv/*.mjs). Se un brand avesse
+# credenziali Vamart proprie (non condivise), basta aggiungere
+# VAMART_USER_<CODICE> / VAMART_PASS_<CODICE> e usarli al posto di quelli
+# condivisi nel job di quel brand.
 
 on:
   schedule:
@@ -173,3 +176,72 @@ jobs:
         if: failure()
         run: |
           echo "::error::Scraping/import Vamart (Master Mobili) fallito. Controllare il log (cambio password, layout portale, 2FA) e importare manualmente dal pannello admin nel frattempo."
+
+  # Job pronto per il brand Febal, ma SALTATO automaticamente (non fallisce,
+  # non manda notifiche) finche' il secret VAMART_URL_FEBAL non viene
+  # impostato: appena lo aggiungi in Settings > Secrets, questo job comincia
+  # a girare alla prossima esecuzione oraria senza altre modifiche qui.
+  scrape-e-importa-febal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: ${{ secrets.VAMART_URL_FEBAL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Installa dipendenze scraper
+        working-directory: scraper
+        run: npm install
+
+      - name: Installa Chromium per Playwright
+        working-directory: scraper
+        run: npx playwright install --with-deps chromium
+
+      - name: Scarica CSV commissioni di assistenza + Piano di Carico da Vamart
+        working-directory: scraper
+        env:
+          GESTIONALE_URL: ${{ secrets.VAMART_URL_FEBAL }}
+          GESTIONALE_USER: ${{ secrets.VAMART_USER }}
+          GESTIONALE_PASS: ${{ secrets.VAMART_PASS }}
+        run: npm run download
+
+      - name: Installa dipendenze importatore
+        working-directory: scripts/import-csv
+        run: npm install
+
+      - name: Importa commissioni di assistenza in Supabase
+        working-directory: scripts/import-csv
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BRAND_CODICE: FEBAL
+        run: node importCommissioniAssistenza.mjs ../../scraper/downloads/ultimo.csv
+
+      - name: Importa Piano di Carico in Supabase (avanzamento fasi ordine/giacenza/consegna)
+        working-directory: scripts/import-csv
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ORIGINE_IMPORT: scraper_automatico
+          BRAND_CODICE: FEBAL
+        run: node importVamartCsv.mjs ../../scraper/downloads/ultimo-piano-di-carico.csv
+
+      - name: Carica CSV scaricati e screenshot di debug come artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultimi-csv-vamart-febal
+          path: |
+            scraper/downloads/ultimo.csv
+            scraper/downloads/ultimo-piano-di-carico.csv
+            scraper/downloads/debug-*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Notifica fallimento
+        if: failure()
+        run: |
+          echo "::error::Scraping/import Vamart (Febal) fallito. Controllare il log (cambio password, layout portale, 2FA) e importare manualmente dal pannello admin nel frattempo."

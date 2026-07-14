@@ -139,13 +139,19 @@ async function main() {
 
   const { data: brand, error: erroreBrand } = await supabase
     .from("brands")
-    .select("id, nome")
+    .select("id, nome, richiede_consegna_assistenza")
     .eq("codice", BRAND_CODICE)
     .maybeSingle();
   if (erroreBrand) throw erroreBrand;
   if (!brand) throw new Error(`Brand '${BRAND_CODICE}' non trovato in brands (hai gia' applicato la migrazione 0011_multi_brand.sql?)`);
   const brandId = brand.id;
-  console.log(`Brand: ${brand.nome} (${BRAND_CODICE})`);
+  // Vedi 0014_richiede_consegna_brand.sql: se false, l'assistenza di questo
+  // brand si chiude gia' all'arrivo merce, senza aspettare una consegna
+  // tracciata a parte. Default true se la colonna non esiste ancora o e'
+  // null, per compatibilita' con brand su cui la migrazione non e' ancora
+  // stata applicata.
+  const richiedeConsegna = brand.richiede_consegna_assistenza ?? true;
+  console.log(`Brand: ${brand.nome} (${BRAND_CODICE}) - richiede consegna assistenza: ${richiedeConsegna}`);
 
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
@@ -308,7 +314,7 @@ async function main() {
         await sincronizzaFasiConsegna(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
       } else {
         await completaFasiPregresseAssistenza(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
-        await sincronizzaFasiAssistenza(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
+        await sincronizzaFasiAssistenza(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica, richiedeConsegna);
       }
     } catch (err) {
       righeErrore++;
@@ -459,7 +465,7 @@ async function completaFasiPregresseAssistenza(supabase, praticaId, righe, fasiI
     .in("id", idFasiDaCompletare);
 }
 
-async function sincronizzaFasiAssistenza(supabase, praticaId, righe, fasiIds, perFase) {
+async function sincronizzaFasiAssistenza(supabase, praticaId, righe, fasiIds, perFase, richiedeConsegna = true) {
   if (!righe || righe.length === 0) return;
 
   const tutteOrdinate = righe.every((r) => STATI_ORDINATO_O_OLTRE.has(r.status));
@@ -473,11 +479,19 @@ async function sincronizzaFasiAssistenza(supabase, praticaId, righe, fasiIds, pe
   }
   const confermaOrdineFatta = faseConfermaOrdine?.stato === "completata";
 
-  const passaggi = [
-    { faseId: fasiIds.ordine_ricambi, condizione: tutteOrdinate, nota: "Tutte le righe risultano ordinate su Vamart (Piano di Carico)." },
-    { faseId: fasiIds.arrivo_merce, condizione: tutteArrivate && confermaOrdineFatta, nota: "Tutte le righe risultano arrivate in giacenza su Vamart (Piano di Carico), dopo conferma ordine dichiarata dall'operatore." },
-    { faseId: fasiIds.consegna_materiale, condizione: tutteConsegnate && confermaOrdineFatta, nota: "Tutte le righe risultano consegnate su Vamart (Piano di Carico)." },
-  ];
+  // Vedi 0014_richiede_consegna_brand.sql: se il brand non richiede una
+  // consegna materiale tracciata a parte, il passaggio finale e' "arrivo
+  // merce" invece di "consegna materiale" (la pratica si chiude prima).
+  const passaggi = richiedeConsegna
+    ? [
+        { faseId: fasiIds.ordine_ricambi, condizione: tutteOrdinate, nota: "Tutte le righe risultano ordinate su Vamart (Piano di Carico)." },
+        { faseId: fasiIds.arrivo_merce, condizione: tutteArrivate && confermaOrdineFatta, nota: "Tutte le righe risultano arrivate in giacenza su Vamart (Piano di Carico), dopo conferma ordine dichiarata dall'operatore." },
+        { faseId: fasiIds.consegna_materiale, condizione: tutteConsegnate && confermaOrdineFatta, nota: "Tutte le righe risultano consegnate su Vamart (Piano di Carico)." },
+      ]
+    : [
+        { faseId: fasiIds.ordine_ricambi, condizione: tutteOrdinate, nota: "Tutte le righe risultano ordinate su Vamart (Piano di Carico)." },
+        { faseId: fasiIds.arrivo_merce, condizione: tutteArrivate && confermaOrdineFatta, nota: "Tutte le righe risultano arrivate in giacenza su Vamart (Piano di Carico), dopo conferma ordine dichiarata dall'operatore. Consegna materiale non richiesta per questo brand: la pratica si chiude qui." },
+      ];
 
   for (const [indice, passaggio] of passaggi.entries()) {
     const faseCorrente = perFase.get(passaggio.faseId);
@@ -495,6 +509,19 @@ async function sincronizzaFasiAssistenza(supabase, praticaId, righe, fasiIds, pe
       }
     } else {
       await supabase.from("pratiche").update({ stato_generale: "chiusa", data_chiusura_effettiva: new Date().toISOString() }).eq("id", praticaId).not("stato_generale", "in", "(chiusa,annullata)");
+
+      // Marca la fase "consegna materiale" come non richiesta (resterebbe
+      // altrimenti "da iniziare" per sempre): stesso motivo spiegato nella
+      // versione TS in apps/web/lib/import/eseguiImportazione.ts.
+      if (!richiedeConsegna) {
+        const faseConsegnaMateriale = perFase.get(fasiIds.consegna_materiale);
+        if (faseConsegnaMateriale && faseConsegnaMateriale.stato !== "completata") {
+          await supabase
+            .from("pratica_fasi")
+            .update({ stato: "completata", data_effettiva: new Date().toISOString(), note: "Non richiesta per questo brand: la pratica si chiude senza tracciare una consegna separata." })
+            .eq("id", faseConsegnaMateriale.id);
+        }
+      }
     }
   }
 }
