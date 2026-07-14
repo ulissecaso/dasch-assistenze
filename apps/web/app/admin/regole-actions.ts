@@ -12,6 +12,12 @@ export async function creaRegolaAssegnazione(formData: FormData) {
   const operatoreId = String(formData.get("operatore_id") ?? "");
   const priorita = Number(formData.get("priorita") ?? 100);
   const tipoPratica = String(formData.get("tipo_pratica") ?? "assistenza");
+  // "" (opzione "Tutti i brand") -> null: vedi 0011_multi_brand.sql, una
+  // regola con brand_id null vale per tutti i brand. Fondamentale scegliere
+  // un brand specifico quando un nuovo brand ha operatori propri, altrimenti
+  // questa regola si applicherebbe anche a Cinquegrana/Master Mobili.
+  const brandIdGrezzo = String(formData.get("brand_id") ?? "").trim();
+  const brandId = brandIdGrezzo === "" ? null : brandIdGrezzo;
 
   if (!nome || !valoreDa || !valoreA || !operatoreId) {
     throw new Error("Tutti i campi sono obbligatori");
@@ -29,6 +35,7 @@ export async function creaRegolaAssegnazione(formData: FormData) {
     operatore_id: operatoreId,
     priorita,
     tipo_pratica: tipoPratica,
+    brand_id: brandId,
     attiva: true,
   });
   if (error) throw error;
