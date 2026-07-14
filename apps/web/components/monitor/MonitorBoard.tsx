@@ -29,6 +29,11 @@ export type AlertRigaMonitor = {
   /** Brand a cui appartiene la pratica (Cinquegrana / Master Mobili). Assente
    *  = board che mostra un solo brand per definizione (nessun badge). */
   brand?: { codice: string; nome: string; colore: string };
+  /** Tipo di pratica (assistenza o consegna): usato solo dalla dashboard
+   *  operatore, che mescola i due moduli per chi li segue entrambi (es.
+   *  l'operatore unico di Febal). Assente = board di un solo tipo per
+   *  definizione (Monitor Assistenze o Monitor Consegne separati). */
+  tipo?: "assistenza" | "consegna";
 };
 
 export type OperatoreCardMonitor = {
@@ -96,6 +101,12 @@ export default function MonitorBoard({
   // quando manca "a occhio" una pratica attesa. Vuoto/omesso = nessun
   // problema noto, nessun banner.
   avvisiImportazione = [],
+  // Tipi di pratica che l'operatore segue davvero (assistenza e/o consegna):
+  // stesso ruolo di brandsAttivi ma per il filtro "Insieme / Solo Assistenza
+  // / Solo Consegne", pensato per l'operatore unico che fa entrambe le cose
+  // (es. Febal). Se omesso, il filtro compare solo quando le righe presenti
+  // in questo momento mescolano gia' entrambi i tipi.
+  tipiAttivi,
 }: {
   titolo: ReactNode;
   operatori: OperatoreCardMonitor[];
@@ -108,6 +119,7 @@ export default function MonitorBoard({
   variante?: "assistenza" | "consegna";
   brandsAttivi?: { codice: string; nome: string; colore: string }[];
   avvisiImportazione?: AvvisoImportazioneMonitor[];
+  tipiAttivi?: ("assistenza" | "consegna")[];
 }) {
   const accento = variante === "consegna" ? "#f59e0b" : variante === "assistenza" ? "#6366f1" : null;
   const iconaModulo = variante === "consegna" ? "truck" : "headset";
@@ -115,6 +127,7 @@ export default function MonitorBoard({
   const [kiosk, setKiosk] = useState(false);
   const [soloUrgenti, setSoloUrgenti] = useState(false);
   const [filtroBrand, setFiltroBrand] = useState<string | null>(null); // null = tutti i brand
+  const [filtroTipo, setFiltroTipo] = useState<"assistenza" | "consegna" | null>(null); // null = insieme
   const boardRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -128,6 +141,14 @@ export default function MonitorBoard({
     brandsAttivi && brandsAttivi.length > 0
       ? brandsAttivi
       : Array.from(new Map(alertRows.filter((r) => r.brand).map((r) => [r.brand!.codice, r.brand!])).values());
+
+  // Stessa idea per il filtro tipo (assistenza/consegna): se il chiamante
+  // passa tipiAttivi lo usiamo sempre, altrimenti si deriva da quali tipi
+  // compaiono davvero nelle righe attuali.
+  const tipiDisponibili =
+    tipiAttivi && tipiAttivi.length > 0
+      ? tipiAttivi
+      : Array.from(new Set(alertRows.filter((r) => r.tipo).map((r) => r.tipo!)));
 
   useEffect(() => {
     const mesi = ["GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO", "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"];
@@ -158,7 +179,8 @@ export default function MonitorBoard({
   }
 
   const righePerLivello = soloUrgenti ? alertRows.filter((r) => r.livello === "critica") : alertRows;
-  const righeVisibili = (filtroBrand ? righePerLivello.filter((r) => r.brand?.codice === filtroBrand) : righePerLivello).slice(0, righeMax);
+  const righePerBrand = filtroBrand ? righePerLivello.filter((r) => r.brand?.codice === filtroBrand) : righePerLivello;
+  const righeVisibili = (filtroTipo ? righePerBrand.filter((r) => r.tipo === filtroTipo) : righePerBrand).slice(0, righeMax);
 
   return (
     <div ref={boardRef} className="mon-wrap">
@@ -198,6 +220,31 @@ export default function MonitorBoard({
                 {b.nome}
               </button>
             ))}
+          </div>
+        )}
+
+        {tipiDisponibili.length > 1 && (
+          <div className="mon-brand-row">
+            <button
+              className={`mon-brand-chip${filtroTipo === null ? " attivo" : ""}`}
+              onClick={() => setFiltroTipo(null)}
+            >
+              Insieme
+            </button>
+            <button
+              className={`mon-brand-chip${filtroTipo === "assistenza" ? " attivo" : ""}`}
+              style={filtroTipo === "assistenza" ? { background: "#6366f1", borderColor: "#6366f1" } : { borderColor: "#6366f1", color: "#6366f1" }}
+              onClick={() => setFiltroTipo("assistenza")}
+            >
+              Solo Assistenza
+            </button>
+            <button
+              className={`mon-brand-chip${filtroTipo === "consegna" ? " attivo" : ""}`}
+              style={filtroTipo === "consegna" ? { background: "#f59e0b", borderColor: "#f59e0b" } : { borderColor: "#f59e0b", color: "#f59e0b" }}
+              onClick={() => setFiltroTipo("consegna")}
+            >
+              Solo Consegne
+            </button>
           </div>
         )}
 

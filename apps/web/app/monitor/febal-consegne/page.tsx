@@ -1,9 +1,7 @@
-// app/monitor/consegne/page.tsx
-// Vista pubblica di sola visualizzazione del Monitor Consegne, pensata per il
-// PC collegato al monitor a parete in ufficio: nessun login, nessuna sessione
-// admin, nessun link verso il resto del portale. Stessa logica di accesso di
-// /monitor/direzione (chiave segreta in URL, variabile MONITOR_ACCESS_KEY):
-// vedi il commento in quel file per il perche'.
+// app/monitor/febal-consegne/page.tsx
+// Vista pubblica di sola visualizzazione del Monitor Consegne, dedicata al
+// solo brand Febal - vedi il commento in /monitor/febal-assistenza/page.tsx
+// per il motivo (TV/ufficio separato, gruppo aziendale diverso).
 import { creaSupabaseClientAdmin } from "@/lib/supabase/server";
 import MonitorBoard from "@/components/monitor/MonitorBoard";
 import { caricaDatiConsegne } from "@/lib/monitor/caricaDatiConsegne";
@@ -11,7 +9,7 @@ import { caricaDatiConsegne } from "@/lib/monitor/caricaDatiConsegne";
 export const dynamic = "force-dynamic";
 export const metadata = { robots: { index: false, follow: false } };
 
-export default async function MonitorConsegnePubblico({
+export default async function MonitorFebalConsegnePubblico({
   searchParams,
 }: {
   searchParams: { chiave?: string };
@@ -27,19 +25,13 @@ export default async function MonitorConsegnePubblico({
     );
   }
 
-  // Client con service role: nessuna sessione utente su questa pagina (vedi
-  // stesso motivo in /monitor/direzione).
   const supabase = creaSupabaseClientAdmin();
-  // Febal ha una TV/monitor tutta sua in un ufficio separato (gruppo
-  // aziendale diverso da Cinquegrana/Master Mobili): questa vista "generale"
-  // non deve mai mostrare i suoi dati. Vedi /monitor/febal-consegne per la
-  // vista dedicata a Febal.
-  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiConsegne(supabase, { escludiBrandCodici: ["FEBAL"] });
+  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiConsegne(supabase, { soloBrandCodici: ["FEBAL"] });
 
   return (
     <div className="h-screen overflow-hidden p-3" style={{ background: "#0a0e16" }}>
       <MonitorBoard
-        titolo={<>MONITORAGGIO<br />CONSEGNE</>}
+        titolo={<>MONITORAGGIO<br />CONSEGNE FEBAL</>}
         operatori={operatori}
         alertRows={alertRows}
         stats={stats}

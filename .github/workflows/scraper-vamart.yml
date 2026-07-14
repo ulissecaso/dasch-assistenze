@@ -177,14 +177,24 @@ jobs:
         run: |
           echo "::error::Scraping/import Vamart (Master Mobili) fallito. Controllare il log (cambio password, layout portale, 2FA) e importare manualmente dal pannello admin nel frattempo."
 
-  # Job pronto per il brand Febal, ma SALTATO automaticamente (non fallisce,
-  # non manda notifiche) finche' il secret VAMART_URL_FEBAL non viene
-  # impostato: appena lo aggiungi in Settings > Secrets, questo job comincia
-  # a girare alla prossima esecuzione oraria senza altre modifiche qui.
+  # Job per il brand Febal: richiede il secret VAMART_URL_FEBAL impostato
+  # (Settings > Secrets and variables > Actions). NOTA: GitHub Actions non
+  # permette di leggere "secrets" dentro un "if:" a livello di job (errore
+  # "Unrecognized named-value: 'secrets'"), quindi qui - a differenza di
+  # quanto si potrebbe pensare - il job gira sempre; se il secret non fosse
+  # impostato fallirebbe al primo step con un errore di login su URL vuoto.
   scrape-e-importa-febal:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    if: ${{ secrets.VAMART_URL_FEBAL != '' }}
+    # 45 min (invece dei 15 di Cinquegrana/Master Mobili): la PRIMISSIMA
+    # importazione di un brand nuovo deve creare da zero una pratica alla
+    # volta per ogni commissione storica (importCommissioniAssistenza.mjs
+    # elabora le righe in sequenza, una query alla volta), quindi con ~750
+    # righe puo' superare abbondantemente i 15 minuti. Le esecuzioni
+    # successive troveranno quasi tutto gia' presente (fast-path "gia'
+    # presenti") e torneranno rapide: se in futuro resta lento anche a
+    # regime, andra' ottimizzato lo script stesso (query in blocco/parallele,
+    # come gia' fatto in importVamartCsv.mjs), non solo il timeout.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

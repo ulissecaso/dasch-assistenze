@@ -26,12 +26,34 @@ function oggiIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-export async function caricaDatiConsegne(supabase: any) {
+// Vedi commento in caricaDatiDirezione.ts: stessa logica di filtro brand,
+// duplicata qui per lo stesso motivo per cui il resto del file e' duplicato
+// (query dedicate al modulo Consegne).
+type OpzioniFiltroBrand = { escludiBrandCodici?: string[]; soloBrandCodici?: string[] };
+
+async function risolviIdBrand(supabase: any, codici: string[]): Promise<string[]> {
+  if (!codici || codici.length === 0) return [];
+  const { data } = await supabase.from("brands").select("id").in("codice", codici);
+  return (data ?? []).map((b: any) => b.id);
+}
+
+export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBrand = {}) {
   const adessoMs = Date.now();
   const oggi = oggiIso();
 
+  const [idEsclusi, idSolo] = await Promise.all([
+    risolviIdBrand(supabase, opzioni.escludiBrandCodici ?? []),
+    risolviIdBrand(supabase, opzioni.soloBrandCodici ?? []),
+  ]);
+  const listaSql = (ids: string[]) => `(${ids.join(",")})`;
+  const conFiltroBrand = (query: any, campo: string) => {
+    if (idSolo.length > 0) return query.in(campo, idSolo);
+    if (idEsclusi.length > 0) return query.not(campo, "in", listaSql(idEsclusi));
+    return query;
+  };
+
   const [
-    { data: operatoriRegole },
+    { data: operatoriRegoleGrezze },
     { data: faseConteggio },
     { data: faseTabella },
     { data: praticheConsegnaAperte },
@@ -42,53 +64,73 @@ export async function caricaDatiConsegne(supabase: any) {
     // Solo gli operatori con almeno una regola di assegnazione attiva per le
     // consegne compaiono nelle card: a differenza del monitor assistenza,
     // qui l'elenco e' specifico per questo modulo (oggi Francesca e Lucia).
+    // Il brand_id della regola viene filtrato in JS piu' sotto.
     supabase
       .from("regole_assegnazione")
-      .select("utenti:operatore_id(id, nome, cognome, colore_badge)")
+      .select("brand_id, utenti:operatore_id(id, nome, cognome, colore_badge)")
       .eq("tipo_pratica", "consegna")
       .eq("attiva", true),
     // Conteggio (per le card operatore e le statistiche): fasi consegna
     // "in_corso", senza limite di righe (vedi stesso motivo spiegato in
     // caricaDatiDirezione.ts per la versione assistenza).
-    supabase
-      .from("pratica_fasi")
-      .select(`
+    conFiltroBrand(
+      supabase
+        .from("pratica_fasi")
+        .select(`
         id, data_prevista, fase_id,
         fasi_workflow!inner(codice),
-        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo)
+        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo, brand_id)
       `)
-      .eq("stato", "in_corso")
-      .eq("pratiche.tipo", "consegna")
-      .in("fasi_workflow.codice", FASI_CONSEGNA)
-      .limit(5000),
+        .eq("stato", "in_corso")
+        .eq("pratiche.tipo", "consegna")
+        .in("fasi_workflow.codice", FASI_CONSEGNA),
+      "pratiche.brand_id"
+    ).limit(5000),
     // Tabella: stesse righe con i dati da mostrare, ordinate.
-    supabase
-      .from("pratica_fasi")
-      .select(`
+    conFiltroBrand(
+      supabase
+        .from("pratica_fasi")
+        .select(`
         id, stato, data_prevista, fase_id,
         fasi_workflow!inner(codice, nome),
-        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo, brand_id,
           clienti(nome_completo),
           utenti:operatore_assegnato_id(id, nome, cognome, colore_badge),
           brands(codice, nome, colore)
         )
       `)
-      .eq("stato", "in_corso")
-      .eq("pratiche.tipo", "consegna")
-      .in("fasi_workflow.codice", FASI_CONSEGNA)
-      .order("data_prevista", { ascending: true })
-      .limit(300),
+        .eq("stato", "in_corso")
+        .eq("pratiche.tipo", "consegna")
+        .in("fasi_workflow.codice", FASI_CONSEGNA)
+        .order("data_prevista", { ascending: true }),
+      "pratiche.brand_id"
+    ).limit(300),
     // Tutte le pratiche di consegna ancora aperte: servono per l'avviso
     // "merce parzialmente arrivata" (incrociate con la vista qui sotto).
-    supabase
-      .from("pratiche")
-      .select("id, codice_commissione, operatore_assegnato_id, data_consegna_prevista, clienti(nome_completo), utenti:operatore_assegnato_id(id, nome, cognome, colore_badge), brands(codice, nome, colore)")
-      .eq("tipo", "consegna")
-      .not("stato_generale", "in", '("chiusa","annullata")'),
-    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "consegna").not("stato_generale", "in", '("chiusa","annullata")'),
-    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "consegna").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
+    conFiltroBrand(
+      supabase
+        .from("pratiche")
+        .select("id, codice_commissione, operatore_assegnato_id, data_consegna_prevista, brand_id, clienti(nome_completo), utenti:operatore_assegnato_id(id, nome, cognome, colore_badge), brands(codice, nome, colore)")
+        .eq("tipo", "consegna")
+        .not("stato_generale", "in", '("chiusa","annullata")'),
+      "brand_id"
+    ),
+    conFiltroBrand(
+      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "consegna").not("stato_generale", "in", '("chiusa","annullata")'),
+      "brand_id"
+    ),
+    conFiltroBrand(
+      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "consegna").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
+      "brand_id"
+    ),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
   ]);
+
+  const operatoriRegole = (operatoriRegoleGrezze ?? []).filter((r: any) => {
+    if (idSolo.length > 0) return r.brand_id && idSolo.includes(r.brand_id);
+    if (idEsclusi.length > 0) return !r.brand_id || !idEsclusi.includes(r.brand_id);
+    return true;
+  });
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
 

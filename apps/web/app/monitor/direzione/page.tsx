@@ -33,7 +33,11 @@ export default async function MonitorDirezionePubblico({
   // login su questa pagina), quindi serve un client che bypassa le RLS per
   // poter comunque leggere i dati aggregati da mostrare sul monitor.
   const supabase = creaSupabaseClientAdmin();
-  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiDirezione(supabase);
+  // Febal ha una TV/monitor tutta sua in un ufficio separato (gruppo
+  // aziendale diverso da Cinquegrana/Master Mobili): questa vista "generale"
+  // non deve mai mostrare i suoi dati. Vedi /monitor/febal-assistenza per la
+  // vista dedicata a Febal.
+  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiDirezione(supabase, { escludiBrandCodici: ["FEBAL"] });
 
   return (
     <div className="h-screen overflow-hidden p-3" style={{ background: "#0a0e16" }}>

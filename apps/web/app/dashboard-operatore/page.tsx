@@ -36,14 +36,14 @@ export default async function DashboardOperatorePage() {
   const adessoMs = Date.now();
   const oggi = oggiIso();
 
-  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }, { data: brandsAttivi }] = await Promise.all([
+  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }, { data: brandsAttivi }, { data: regoleOperatore }] = await Promise.all([
     supabase.from("utenti").select("nome, cognome, colore_badge").eq("id", user.id).maybeSingle(),
     supabase
       .from("pratica_fasi")
       .select(`
         id, stato, data_prevista, fase_id,
         fasi_workflow(codice, nome),
-        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id,
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
           clienti(nome_completo),
           brands(codice, nome, colore)
         )
@@ -72,6 +72,16 @@ export default async function DashboardOperatorePage() {
       .select("brands(codice, nome, colore)")
       .eq("operatore_id", user.id)
       .eq("attivo", true),
+    // Tipi di pratica (assistenza/consegna) su cui QUESTO operatore è
+    // abilitato tramite regole di assegnazione attive: serve per mostrare
+    // sempre i pulsanti "Insieme / Solo Assistenza / Solo Consegne" a chi
+    // segue entrambi i moduli (es. l'operatore unico di Febal), anche quando
+    // in questo istante ha in ritardo solo pratiche di un tipo.
+    supabase
+      .from("regole_assegnazione")
+      .select("tipo_pratica")
+      .eq("operatore_id", user.id)
+      .eq("attiva", true),
   ]);
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
@@ -157,6 +167,7 @@ export default async function DashboardOperatorePage() {
       operatoreColore: opColore,
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
       brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
+      tipo: p.tipo,
     };
   });
 
@@ -183,6 +194,7 @@ export default async function DashboardOperatorePage() {
         operatoreColore: opColore,
         azione: "Valutare consegna parziale o sollecitare il fornitore",
         brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
+        tipo: "consegna" as const,
       };
     });
 
@@ -212,6 +224,10 @@ export default async function DashboardOperatorePage() {
     .map((ob: any) => ob.brands)
     .filter(Boolean) as { codice: string; nome: string; colore: string }[];
 
+  const tipiOperatore = Array.from(
+    new Set((regoleOperatore ?? []).map((r: any) => r.tipo_pratica).filter(Boolean))
+  ) as ("assistenza" | "consegna")[];
+
   return (
     <div className="h-screen overflow-hidden p-3">
       <MonitorBoard
@@ -230,6 +246,7 @@ export default async function DashboardOperatorePage() {
         mostraSelettoreSchermoIntero={false}
         righeMax={Math.max(alertRows.length, 1)}
         brandsAttivi={brandsOperatore}
+        tipiAttivi={tipiOperatore}
       />
     </div>
   );

@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/cron/check-sla", "schedule": "0 6 * * *" },
-    { "path": "/api/cron/importa-email", "schedule": "0 5 * * *" }
+    { "path": "/api/cron/importa-email", "schedule": "0 5 * * *" },
+    { "path": "/api/cron/importa-email?brand=FEBAL", "schedule": "10 5 * * *" }
   ]
 }

@@ -13,11 +13,42 @@ function oggiIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-export async function caricaDatiDirezione(supabase: any) {
+// opzioni.escludiBrandCodici: brand da NASCONDERE (es. la dasch "generale" di
+// Cinquegrana/Master Mobili che non deve mostrare Febal, perche' Febal ha una
+// TV/monitor tutta sua ed e' un gruppo aziendale separato).
+// opzioni.soloBrandCodici: se presente, mostra SOLO questi brand (usato dalla
+// vista dedicata di Febal, /monitor/febal-assistenza).
+// Se nessuna delle due opzioni e' passata, il comportamento resta invariato
+// (tutti i brand visibili) - usato dalla dashboard-direzione autenticata, che
+// l'amministratore vuole continuare a vedere per intero, Febal incluso.
+type OpzioniFiltroBrand = { escludiBrandCodici?: string[]; soloBrandCodici?: string[] };
+
+async function risolviIdBrand(supabase: any, codici: string[]): Promise<string[]> {
+  if (!codici || codici.length === 0) return [];
+  const { data } = await supabase.from("brands").select("id").in("codice", codici);
+  return (data ?? []).map((b: any) => b.id);
+}
+
+export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroBrand = {}) {
   const adesso = new Date().toISOString();
   const adessoMs = Date.now();
 
-  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegole }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
+  const [idEsclusi, idSolo] = await Promise.all([
+    risolviIdBrand(supabase, opzioni.escludiBrandCodici ?? []),
+    risolviIdBrand(supabase, opzioni.soloBrandCodici ?? []),
+  ]);
+  const listaSql = (ids: string[]) => `(${ids.join(",")})`;
+
+  // Applica il filtro brand (se presente) a una query gia' costruita, sia sul
+  // campo diretto "brand_id" (query su "pratiche") sia su quello annidato
+  // "pratiche.brand_id" (query su "pratica_fasi" con join pratiche!inner).
+  const conFiltroBrand = (query: any, campo: string) => {
+    if (idSolo.length > 0) return query.in(campo, idSolo);
+    if (idEsclusi.length > 0) return query.not(campo, "in", listaSql(idEsclusi));
+    return query;
+  };
+
+  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegoleGrezze }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
     // Query "conteggio": alimenta le card per operatore e le statistiche
     // (scaduti, in scadenza oggi, urgenti...). Volutamente SENZA il limite
     // usato per la tabella: se la limitassimo, un operatore con tante fasi
@@ -25,50 +56,72 @@ export async function caricaDatiDirezione(supabase: any) {
     // operatore risulterebbero troncati e sbagliati (visti anche solo 71 su
     // 241 reali per un operatore). Selezioniamo solo i campi indispensabili
     // per il conteggio, per tenere leggera una query senza limite di righe.
-    supabase
-      .from("pratica_fasi")
-      .select(`
+    conFiltroBrand(
+      supabase
+        .from("pratica_fasi")
+        .select(`
         id, data_prevista, fase_id,
-        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo)
+        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo, brand_id)
       `)
-      .in("stato", ["da_iniziare", "in_corso"])
-      .lt("data_prevista", adesso)
-      .eq("pratiche.tipo", "assistenza")
-      .limit(5000),
+        .in("stato", ["da_iniziare", "in_corso"])
+        .lt("data_prevista", adesso)
+        .eq("pratiche.tipo", "assistenza"),
+      "pratiche.brand_id"
+    ).limit(5000),
     // Query "tabella": righe da mostrare nel Monitor Assistenze, ordinate
     // dalla più urgente (più vecchia) in su. Questo limite serve solo a
     // contenere il payload della tabella: la vista a parete la taglia
     // ulteriormente a righeMax (11) tramite MonitorBoard.
-    supabase
-      .from("pratica_fasi")
-      .select(`
+    conFiltroBrand(
+      supabase
+        .from("pratica_fasi")
+        .select(`
         id, stato, data_prevista, fase_id,
         fasi_workflow(codice, nome),
-        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo, brand_id,
           clienti(nome_completo),
           utenti:operatore_assegnato_id(id, nome, cognome, colore_badge),
           brands(codice, nome, colore)
         )
       `)
-      .in("stato", ["da_iniziare", "in_corso"])
-      .lt("data_prevista", adesso)
-      .eq("pratiche.tipo", "assistenza")
-      .order("data_prevista", { ascending: true })
-      .limit(300),
+        .in("stato", ["da_iniziare", "in_corso"])
+        .lt("data_prevista", adesso)
+        .eq("pratiche.tipo", "assistenza")
+        .order("data_prevista", { ascending: true }),
+      "pratiche.brand_id"
+    ).limit(300),
     // Operatori da mostrare come card: solo chi ha una regola di assegnazione
     // ATTIVA di tipo "assistenza" (stesso pattern di caricaDatiConsegne.ts).
     // Prima si prendevano TUTTI gli operatori attivi senza distinzione di
     // tipo, per cui operatori solo-Consegne (es. Francesca, Lucia)
-    // comparivano anche nel Monitor Assistenza con 0 alert.
+    // comparivano anche nel Monitor Assistenza con 0 alert. Il brand_id della
+    // regola viene filtrato in JS piu' sotto (vedi operatoriAssistenza).
     supabase
       .from("regole_assegnazione")
-      .select("utenti:operatore_id(id, nome, cognome, colore_badge)")
+      .select("brand_id, utenti:operatore_id(id, nome, cognome, colore_badge)")
       .eq("tipo_pratica", "assistenza")
       .eq("attiva", true),
-    supabase.from("pratiche").select("*", { count: "exact", head: true }).not("stato_generale", "in", '("chiusa","annullata")'),
-    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
+    conFiltroBrand(
+      supabase.from("pratiche").select("*", { count: "exact", head: true }).not("stato_generale", "in", '("chiusa","annullata")'),
+      "brand_id"
+    ),
+    conFiltroBrand(
+      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
+      "brand_id"
+    ),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
   ]);
+
+  // Filtra le regole (quindi gli operatori-card) in base allo stesso criterio
+  // brand: in modalita' "escludi" tiene le regole generiche (brand_id nullo,
+  // valide per tutti i brand) e quelle di brand non esclusi; in modalita'
+  // "solo" tiene SOLO le regole del brand richiesto (una regola generica non
+  // e' specifica di quel brand, quindi non comparirebbe sulla TV dedicata).
+  const operatoriRegole = (operatoriRegoleGrezze ?? []).filter((r: any) => {
+    if (idSolo.length > 0) return r.brand_id && idSolo.includes(r.brand_id);
+    if (idEsclusi.length > 0) return !r.brand_id || !idEsclusi.includes(r.brand_id);
+    return true;
+  });
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
 
