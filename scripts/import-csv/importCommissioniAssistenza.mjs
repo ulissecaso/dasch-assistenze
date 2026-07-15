@@ -25,6 +25,18 @@
 // finestra di date (caso ambiguo), non indoviniamo: la riga viene segnalata
 // come errore in importazioni_csv_errori per una verifica manuale.
 //
+//  3) La commissione risulta gia' tracciata, ma con tipo diverso da
+//     'assistenza' (in pratica: 'consegna'). Succede quando
+//     importVamartCsv.mjs (Piano di Carico) l'ha importata per prima,
+//     senza ancora sapere che si trattava di una commissione di assistenza
+//     (es. upload manuale dal pannello admin del solo Piano di Carico,
+//     formato che oggi e' l'unico supportato in UI, oppure un ordine di
+//     esecuzione invertito). In questo caso la riclassifichiamo ad
+//     assistenza (tipo, fasi, storico) invece di ignorarla: altrimenti
+//     resterebbe visibile nel Monitor Consegne come se fosse una
+//     commissione normale, mentre in Monitor Assistenza non comparirebbe
+//     mai. Vedi riclassificaAdAssistenza più sotto.
+//
 // Uso:
 //   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node importCommissioniAssistenza.mjs "/percorso/commissioni.csv"
 //   (opzionale) BRAND_CODICE=MASTERMOBILI ... stesso principio di
@@ -67,6 +79,105 @@ const ALIAS_COLONNE = {
 
 function normalizzaIntestazione(testo) {
   return String(testo || "").trim().toLowerCase();
+}
+
+// Riclassifica una pratica esistente (creata come 'consegna' dal Piano di
+// Carico prima che risultasse essere una commissione di assistenza) al
+// tipo 'assistenza'. Il trigger DB trg_fn_inizializza_fasi_pratica crea le
+// pratica_fasi corrette solo all'INSERT della pratica: qui la pratica gia'
+// esiste, quindi ricostruiamo manualmente lo stesso risultato che avrebbe
+// prodotto un insert con tipo='assistenza' fin dall'inizio.
+async function riclassificaAdAssistenza(supabase, praticaEsistente, codiceCommissione, fasiAssistenza) {
+  const praticaId = praticaEsistente.id;
+  const tipoPrecedente = praticaEsistente.tipo;
+
+  // 1) Tipo pratica.
+  const { error: erroreTipo } = await supabase.from("pratiche").update({ tipo: "assistenza" }).eq("id", praticaId);
+  if (erroreTipo) throw erroreTipo;
+
+  // 2) Rimuove le pratica_fasi del workflow sbagliato (es. "Programma
+  //    consegna"/"Pagamento ricevuto" per il caso 'consegna'), create dal
+  //    trigger quando la pratica era stata inserita con tipo errato.
+  const { data: fasiAttuali, error: erroreFasiAttuali } = await supabase
+    .from("pratica_fasi")
+    .select("id, fasi_workflow!inner(tipo_pratica)")
+    .eq("pratica_id", praticaId);
+  if (erroreFasiAttuali) throw erroreFasiAttuali;
+  const idsDaRimuovere = (fasiAttuali ?? [])
+    .filter((f) => f.fasi_workflow?.tipo_pratica !== "assistenza")
+    .map((f) => f.id);
+  if (idsDaRimuovere.length > 0) {
+    const { error: erroreRimozione } = await supabase.from("pratica_fasi").delete().in("id", idsDaRimuovere);
+    if (erroreRimozione) throw erroreRimozione;
+  }
+
+  // 3) Crea le pratica_fasi del workflow "assistenza" (stessa logica di
+  //    trg_fn_inizializza_fasi_pratica, replicata qui perche' il trigger
+  //    non si riattiva su un semplice update del tipo).
+  const nuoveFasi = fasiAssistenza.map((f) => ({
+    pratica_id: praticaId,
+    fase_id: f.id,
+    stato: f.avvio_immediato ? "in_corso" : "da_iniziare",
+    data_prevista: new Date(Date.now() + (f.sla_ore_default ?? 24) * 3_600_000).toISOString(),
+  }));
+  const { error: erroreInserimentoFasi } = await supabase.from("pratica_fasi").insert(nuoveFasi);
+  if (erroreInserimentoFasi) throw erroreInserimentoFasi;
+
+  // 4) La pratica esiste gia' su Vamart (aveva gia' righe/articoli dal
+  //    Piano di Carico): "Ricezione", "Apertura pratica" e "Creazione
+  //    commissione" sono gia' vere per definizione, stesso ragionamento
+  //    della pratica "grezza" creata piu' sotto in questo stesso file. La
+  //    fase attiva diventa "Presa in carico". Le fasi successive (ordine
+  //    ricambi, arrivo merce, consegna) verranno sincronizzate dal
+  //    prossimo giro di importVamartCsv.mjs, che ora trovera' tipo =
+  //    'assistenza' e seguira' il ramo corretto.
+  const nomeFase = (codice) => fasiAssistenza.find((f) => f.codice === codice)?.id;
+  const { error: erroreCompletamento } = await supabase
+    .from("pratica_fasi")
+    .update({
+      stato: "completata",
+      data_effettiva: new Date().toISOString(),
+      note: `Completata automaticamente: pratica riclassificata da 'consegna' ad 'assistenza' (la commissione ${codiceCommissione} risulta ora nel CSV Commissioni di assistenza).`,
+    })
+    .eq("pratica_id", praticaId)
+    .in("fase_id", [nomeFase("ricezione"), nomeFase("apertura_pratica"), nomeFase("creazione_commissione")].filter(Boolean));
+  if (erroreCompletamento) throw erroreCompletamento;
+
+  const { error: errorePresaInCarico } = await supabase
+    .from("pratica_fasi")
+    .update({ stato: "in_corso" })
+    .eq("pratica_id", praticaId)
+    .eq("fase_id", nomeFase("presa_in_carico"));
+  if (errorePresaInCarico) throw errorePresaInCarico;
+
+  // 5) Storico, per tracciabilita' (stessa nota sul vincolo 'origine' del
+  //    resto del file: e' un'automazione, non un'importazione CSV in senso
+  //    stretto ne' un'azione utente).
+  await supabase.from("storico_modifiche").insert({
+    entita: "pratiche",
+    entita_id: praticaId,
+    campo: "tipo",
+    valore_precedente: tipoPrecedente,
+    valore_nuovo: "assistenza",
+    origine: "automazione",
+  });
+
+  // 6) Le regole di assegnazione operatore sono separate tra assistenza e
+  //    consegna (stessa iniziale cognome puo' avere operatori diversi nei
+  //    due moduli): senza questo passaggio la pratica resterebbe assegnata
+  //    a chi gestisce le consegne. Usa la stessa funzione SQL gia' in
+  //    produzione (assegna_operatore_automatico), invece di duplicarne la
+  //    logica qui in JS.
+  const { data: cliente } = await supabase.from("clienti").select("nome_completo").eq("id", praticaEsistente.cliente_id).maybeSingle();
+  if (cliente?.nome_completo) {
+    const { data: nuovoOperatoreId } = await supabase.rpc("assegna_operatore_automatico", {
+      p_cliente_nome: cliente.nome_completo,
+      p_tipo_pratica: "assistenza",
+    });
+    if (nuovoOperatoreId) {
+      await supabase.from("pratiche").update({ operatore_assegnato_id: nuovoOperatoreId }).eq("id", praticaId);
+    }
+  }
 }
 
 function leggiCsv(percorsoFile) {
@@ -113,12 +224,18 @@ async function main() {
   const brandId = brand.id;
   console.log(`Brand: ${brand.nome} (${BRAND_CODICE})`);
 
-  // Fasi del workflow che questo script deve toccare: risolte per codice,
-  // non per id fisso, cosi' restano valide anche se qualcuno le ricrea.
+  // Fasi del workflow "assistenza": tutte quelle attive, non solo il
+  // sottoinsieme che questo script tocca direttamente. Servono tutte anche
+  // a riclassificaAdAssistenza per ricostruire da zero le pratica_fasi di
+  // una pratica che era stata creata (erroneamente) come 'consegna'.
+  // Risolte per codice, non per id fisso, cosi' restano valide anche se
+  // qualcuno le ricrea.
   const { data: fasiWorkflow, error: erroreFasi } = await supabase
     .from("fasi_workflow")
-    .select("id, codice")
-    .in("codice", ["ricezione", "presa_in_carico", "apertura_pratica", "creazione_commissione", "ordine_ricambi"]);
+    .select("id, codice, ordine, sla_ore_default, avvio_immediato")
+    .eq("tipo_pratica", "assistenza")
+    .eq("attiva", true)
+    .order("ordine", { ascending: true });
   if (erroreFasi) throw erroreFasi;
   const fasiIds = Object.fromEntries(fasiWorkflow.map((f) => [f.codice, f.id]));
   const faseCreazioneCommissioneId = fasiIds.creazione_commissione;
@@ -145,7 +262,7 @@ async function main() {
     .single();
   if (erroreImport) throw erroreImport;
 
-  let nuove = 0, ricollegate = 0, giaPresenti = 0, errori = 0;
+  let nuove = 0, ricollegate = 0, giaPresenti = 0, riclassificate = 0, errori = 0;
 
   for (const riga of righe) {
     try {
@@ -157,13 +274,20 @@ async function main() {
       // Gia' tracciata (da un import precedente, con questo stesso numero)?
       const { data: praticaEsistente } = await supabase
         .from("pratiche")
-        .select("id")
+        .select("id, tipo, cliente_id")
         .eq("brand_id", brandId)
         .eq("codice_commissione", codiceCommissione)
         .maybeSingle();
 
       if (praticaEsistente) {
-        giaPresenti++;
+        if (praticaEsistente.tipo === "assistenza") {
+          giaPresenti++;
+          continue;
+        }
+        // Tipo diverso da 'assistenza' (praticamente sempre 'consegna'):
+        // vedi commento in cima al file, caso 3.
+        await riclassificaAdAssistenza(supabase, praticaEsistente, codiceCommissione, fasiWorkflow);
+        riclassificate++;
         continue;
       }
 
@@ -321,7 +445,11 @@ async function main() {
     .from("importazioni_csv")
     .update({
       righe_nuove: nuove,
-      righe_aggiornate: ricollegate,
+      // righe_aggiornate raccoglie sia le pratiche ricollegate a una
+      // segnalazione via mail sia quelle riclassificate da 'consegna' ad
+      // 'assistenza': in entrambi i casi una pratica esistente e' stata
+      // modificata (non c'e' una colonna dedicata in importazioni_csv).
+      righe_aggiornate: ricollegate + riclassificate,
       righe_invariate: giaPresenti,
       righe_errore: errori,
       stato: errori > 0 ? "completata_con_errori" : "completata",
@@ -330,7 +458,8 @@ async function main() {
     .eq("id", importazione.id);
 
   console.log(
-    `Import completata. Pratiche nuove: ${nuove}, ricollegate a segnalazioni via mail: ${ricollegate}, gia' presenti: ${giaPresenti}, errori: ${errori}`
+    `Import completata. Pratiche nuove: ${nuove}, ricollegate a segnalazioni via mail: ${ricollegate}, ` +
+    `riclassificate da 'consegna' ad 'assistenza': ${riclassificate}, gia' presenti: ${giaPresenti}, errori: ${errori}`
   );
 }
 
