@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardDirezionePage() {
   const { supabase } = await richiediVisioneDirezione();
-  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiDirezione(supabase);
+  const { alertRows, operatori, stats, avvisiImportazione, brandsAttivi } = await caricaDatiDirezione(supabase);
 
   return (
     <div className="h-screen overflow-hidden p-3">
@@ -21,6 +21,7 @@ export default async function DashboardDirezionePage() {
         righeMax={11}
         variante="assistenza"
         avvisiImportazione={avvisiImportazione}
+        brandsAttivi={brandsAttivi}
       />
     </div>
   );

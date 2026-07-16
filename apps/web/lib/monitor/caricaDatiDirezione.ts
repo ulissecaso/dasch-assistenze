@@ -48,7 +48,7 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     return query;
   };
 
-  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegoleGrezze }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }] = await Promise.all([
+  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegoleGrezze }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }, { data: brandsGrezzi }] = await Promise.all([
     // Query "conteggio": alimenta le card per operatore e le statistiche
     // (scaduti, in scadenza oggi, urgenti...). Volutamente SENZA il limite
     // usato per la tabella: se la limitassimo, un operatore con tante fasi
@@ -101,15 +101,27 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
       .select("brand_id, utenti:operatore_id(id, nome, cognome, colore_badge)")
       .eq("tipo_pratica", "assistenza")
       .eq("attiva", true),
+    // NOTA: qui manca "eq('tipo','assistenza')" mancava prima di questa
+    // correzione, quindi "Pratiche Totali" e "Risolti Oggi" sulla dashboard
+    // Assistenza contavano anche le pratiche di CONSEGNA, gonfiando i numeri
+    // con dati dell'altro modulo (stessa distinzione gia' corretta in
+    // caricaDatiConsegne.ts, che filtra sempre tipo='consegna' sui conteggi
+    // equivalenti).
     conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).not("stato_generale", "in", '("chiusa","annullata")'),
+      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "assistenza").not("stato_generale", "in", '("chiusa","annullata")'),
       "brand_id"
     ),
     conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
+      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "assistenza").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
       "brand_id"
     ),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
+    // Tutti i brand attivi (poi filtrati per escludi/solo qui sotto): serve
+    // per mostrare SEMPRE i pulsanti di filtro "Tutti i brand / Cinquegrana /
+    // Master Mobili" a chi guarda questa dashboard, anche quando in questo
+    // istante le pratiche in ritardo appartengono a un solo brand (stessa
+    // idea di brandsAttivi in dashboard-operatore/page.tsx).
+    supabase.from("brands").select("codice, nome, colore").eq("attivo", true),
   ]);
 
   // Filtra le regole (quindi gli operatori-card) in base allo stesso criterio
@@ -122,6 +134,14 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     if (idEsclusi.length > 0) return !r.brand_id || !idEsclusi.includes(r.brand_id);
     return true;
   });
+
+  // Stesso filtro escludi/solo applicato sopra alle query dati, qui sui
+  // codici brand invece che sugli id (i brand arrivano gia' con il codice).
+  const brandsAttivi = (brandsGrezzi ?? []).filter((b: any) => {
+    if (opzioni.soloBrandCodici && opzioni.soloBrandCodici.length > 0) return opzioni.soloBrandCodici.includes(b.codice);
+    if (opzioni.escludiBrandCodici && opzioni.escludiBrandCodici.length > 0) return !opzioni.escludiBrandCodici.includes(b.codice);
+    return true;
+  }) as { codice: string; nome: string; colore: string }[];
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
 
@@ -236,5 +256,6 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
       praticheTotali: praticheTotali ?? 0,
     },
     avvisiImportazione,
+    brandsAttivi,
   };
 }

@@ -60,6 +60,7 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
     { count: praticheTotali },
     { count: risoltiOggi },
     { data: regoleAttive },
+    { data: brandsGrezzi },
   ] = await Promise.all([
     // Solo gli operatori con almeno una regola di assegnazione attiva per le
     // consegne compaiono nelle card: a differenza del monitor assistenza,
@@ -124,6 +125,11 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
       "brand_id"
     ),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
+    // Tutti i brand attivi (poi filtrati per escludi/solo qui sotto): stessa
+    // idea di caricaDatiDirezione.ts, cosi' i pulsanti di filtro compaiono
+    // sempre, anche quando in questo istante le pratiche in ritardo sono di
+    // un solo brand.
+    supabase.from("brands").select("codice, nome, colore").eq("attivo", true),
   ]);
 
   const operatoriRegole = (operatoriRegoleGrezze ?? []).filter((r: any) => {
@@ -131,6 +137,12 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
     if (idEsclusi.length > 0) return !r.brand_id || !idEsclusi.includes(r.brand_id);
     return true;
   });
+
+  const brandsAttivi = (brandsGrezzi ?? []).filter((b: any) => {
+    if (opzioni.soloBrandCodici && opzioni.soloBrandCodici.length > 0) return opzioni.soloBrandCodici.includes(b.codice);
+    if (opzioni.escludiBrandCodici && opzioni.escludiBrandCodici.length > 0) return !opzioni.escludiBrandCodici.includes(b.codice);
+    return true;
+  }) as { codice: string; nome: string; colore: string }[];
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
 
@@ -276,5 +288,6 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
       praticheTotali: praticheTotali ?? 0,
     },
     avvisiImportazione,
+    brandsAttivi,
   };
 }

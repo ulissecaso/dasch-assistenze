@@ -37,7 +37,7 @@ export default async function MonitorDirezionePubblico({
   // aziendale diverso da Cinquegrana/Master Mobili): questa vista "generale"
   // non deve mai mostrare i suoi dati. Vedi /monitor/febal-assistenza per la
   // vista dedicata a Febal.
-  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiDirezione(supabase, { escludiBrandCodici: ["FEBAL"] });
+  const { alertRows, operatori, stats, avvisiImportazione, brandsAttivi } = await caricaDatiDirezione(supabase, { escludiBrandCodici: ["FEBAL"] });
 
   return (
     <div className="h-screen overflow-hidden p-3" style={{ background: "#0a0e16" }}>
@@ -52,6 +52,7 @@ export default async function MonitorDirezionePubblico({
         righeCliccabili={false}
         variante="assistenza"
         avvisiImportazione={avvisiImportazione}
+        brandsAttivi={brandsAttivi}
       />
     </div>
   );

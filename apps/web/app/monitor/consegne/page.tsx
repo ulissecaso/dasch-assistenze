@@ -34,7 +34,7 @@ export default async function MonitorConsegnePubblico({
   // aziendale diverso da Cinquegrana/Master Mobili): questa vista "generale"
   // non deve mai mostrare i suoi dati. Vedi /monitor/febal-consegne per la
   // vista dedicata a Febal.
-  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiConsegne(supabase, { escludiBrandCodici: ["FEBAL"] });
+  const { alertRows, operatori, stats, avvisiImportazione, brandsAttivi } = await caricaDatiConsegne(supabase, { escludiBrandCodici: ["FEBAL"] });
 
   return (
     <div className="h-screen overflow-hidden p-3" style={{ background: "#0a0e16" }}>
@@ -48,6 +48,7 @@ export default async function MonitorConsegnePubblico({
         righeCliccabili={false}
         variante="consegna"
         avvisiImportazione={avvisiImportazione}
+        brandsAttivi={brandsAttivi}
       />
     </div>
   );

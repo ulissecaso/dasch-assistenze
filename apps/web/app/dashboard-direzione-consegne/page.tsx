@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardDirezioneConsegnePage() {
   const { supabase } = await richiediVisioneDirezione();
-  const { alertRows, operatori, stats, avvisiImportazione } = await caricaDatiConsegne(supabase);
+  const { alertRows, operatori, stats, avvisiImportazione, brandsAttivi } = await caricaDatiConsegne(supabase);
 
   return (
     <div className="h-screen overflow-hidden p-3">
@@ -22,6 +22,7 @@ export default async function DashboardDirezioneConsegnePage() {
         messaggioVuoto="Nessun alert al momento: tutte le consegne sono in linea con le scadenze."
         variante="consegna"
         avvisiImportazione={avvisiImportazione}
+        brandsAttivi={brandsAttivi}
       />
     </div>
   );
