@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
       righe_totali: risultato.righeTotali,
       nuove: risultato.nuove,
       ricollegate: risultato.ricollegate,
+      riclassificate: risultato.riclassificate,
       gia_presenti: risultato.giaPresenti,
       errori: risultato.errori,
       stato: risultato.stato,

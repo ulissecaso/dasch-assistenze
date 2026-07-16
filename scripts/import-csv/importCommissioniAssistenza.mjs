@@ -291,7 +291,15 @@ async function main() {
         continue;
       }
 
-      const nomeCompleto = [riga.nome, riga.cognome].filter(Boolean).join(" ").trim() || "Cliente sconosciuto";
+      // Ordine Cognome-Nome, non Nome-Cognome: e' la convenzione usata in
+      // tutto il resto del sistema (dato Vamart del Piano di Carico, e la
+      // funzione assegna_operatore_automatico che legge la prima lettera
+      // della prima parola come iniziale del COGNOME, vedi 0002_automazioni.sql
+      // e l'overload in 0011_multi_brand.sql). Prima qui l'ordine era
+      // invertito: i clienti creati da questo importatore finivano assegnati
+      // in base all'iniziale del nome proprio invece che del cognome,
+      // capitando quindi all'operatore sbagliato.
+      const nomeCompleto = [riga.cognome, riga.nome].filter(Boolean).join(" ").trim() || "Cliente sconosciuto";
       const dataRegistrazione = parseDataItaliana(riga.dataRegistrazione);
 
       // Cerca una pratica "in attesa" dello stesso cliente (nata da mail,

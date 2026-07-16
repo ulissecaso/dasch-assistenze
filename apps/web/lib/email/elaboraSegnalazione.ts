@@ -21,6 +21,27 @@ function suffissoIntervento(numeroInterventiPrecedenti: number): string {
   return lettera;
 }
 
+// Il campo del form/app è etichettato "Nome e cognome": chi lo compila scrive
+// naturalmente il nome proprio per primo (es. "Mario Rossi"). Tutto il resto
+// del sistema (dato Vamart, e assegna_operatore_automatico che legge la prima
+// lettera della prima parola come iniziale del COGNOME, vedi
+// 0002_automazioni.sql / 0011_multi_brand.sql) si aspetta invece "Cognome
+// Nome". Senza questo riordino, un cliente arrivato da segnalazione
+// email/app veniva smistato in base all'iniziale del nome proprio invece che
+// del cognome, finendo all'operatore sbagliato.
+//
+// Euristica: nessun parser di nomi è perfetto con cognomi composti (es. "Del
+// Prete", "La Marca"), ma per la stragrande maggioranza dei casi (nome +
+// cognome, due parole) l'ultima parola è il cognome. Con un'unica parola, o
+// nessuna, non c'è nulla da riordinare.
+function riordinaCognomeNome(nomeTipizzatoDalCliente: string): string {
+  const parole = nomeTipizzatoDalCliente.trim().split(/\s+/).filter(Boolean);
+  if (parole.length < 2) return nomeTipizzatoDalCliente.trim();
+  const cognome = parole[parole.length - 1];
+  const nome = parole.slice(0, -1).join(" ");
+  return `${cognome} ${nome}`;
+}
+
 async function trovaOCreaCliente(supabase: any, dati: SegnalazioneEstratta, brandId: string) {
   if (dati.email) {
     const { data } = await supabase.from("clienti").select("*").eq("brand_id", brandId).ilike("email", dati.email).limit(1).maybeSingle();
@@ -38,7 +59,7 @@ async function trovaOCreaCliente(supabase: any, dati: SegnalazioneEstratta, bran
   const { data: nuovo, error } = await supabase
     .from("clienti")
     .insert({
-      nome_completo: dati.nome ?? "Cliente da verificare",
+      nome_completo: dati.nome ? riordinaCognomeNome(dati.nome) : "Cliente da verificare",
       telefono: dati.telefono,
       email: dati.email,
       note: "Creato automaticamente da segnalazione email",

@@ -36,7 +36,7 @@ export default function UploadCsvCommissioniForm() {
 
       setStato("ok");
       setMessaggio(
-        `Fatto: ${dati.righe_totali} righe lette, ${dati.nuove} nuove pratiche, ${dati.ricollegate} ricollegate a segnalazioni via mail, ${dati.gia_presenti} già presenti` +
+        `Fatto: ${dati.righe_totali} righe lette, ${dati.nuove} nuove pratiche, ${dati.ricollegate} ricollegate a segnalazioni via mail, ${dati.riclassificate} riclassificate da consegna ad assistenza, ${dati.gia_presenti} già presenti` +
           (dati.errori > 0 ? `, ${dati.errori} errori.` : ".")
       );
       if (inputRef.current) inputRef.current.value = "";
