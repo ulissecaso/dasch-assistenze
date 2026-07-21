@@ -46,6 +46,16 @@ const {
   // due variabili d'ambiente in piu' per ciascun nuovo brand.
   VAMART_URL_COMMISSIONI,
   VAMART_URL_PIANO_DI_CARICO,
+  // Nome esatto dello Store da selezionare nel filtro "Store" (dropdown
+  // condiviso da Commissioni e Piano di Carico, stesso meccanismo del
+  // filtro "Commissioni Assistenza"). Necessario solo per istanze Vamart
+  // condivise da piu' negozi/brand (es. Febal Casa, che condivide
+  // l'istanza "Theorema Arredamenti" con altri store): senza impostarlo,
+  // il filtro resta su qualunque valore la sessione avesse gia' (scoperto
+  // il 21/07/2026 - vedi commento piu' sotto). Per Cinquegrana e Master
+  // Mobili, che hanno un'istanza tutta loro, non va impostato (lasciare
+  // vuoto): "Tutti" e' gia' corretto per loro.
+  VAMART_STORE,
 } = process.env;
 
 function derivaUrlPagina(urlEsplicito, percorso) {
@@ -80,6 +90,31 @@ function locatorFiltroAssistenza(page) {
     'xpath=//label[contains(normalize-space(.),"Commissioni Assistenza")]/following::select[1] ' +
     '| //*[contains(normalize-space(text()),"Commissioni Assistenza")]/following::select[1]'
   ).first();
+}
+
+// Stesso pattern del dropdown "Commissioni Assistenza", ma per il filtro
+// "Store": presente su istanze Vamart condivise da piu' negozi (es. Febal
+// Casa). Va impostato esplicitamente perche' resta su qualunque valore
+// avesse la sessione precedente (bug scoperto il 21/07/2026: un export
+// senza questo filtro impostato su "Febal Casa" aveva restituito dati di
+// ALTRI negozi della stessa istanza, facendo credere che quasi tutte le
+// pratiche di assistenza Febal in Dasch fossero sparite da Vamart).
+function locatorFiltroStore(page) {
+  return page.locator(
+    'xpath=//label[contains(normalize-space(.),"Store")]/following::select[1] ' +
+    '| //*[contains(normalize-space(text()),"Store")]/following::select[1]'
+  ).first();
+}
+
+async function impostaFiltroStoreSeRichiesto(page) {
+  if (!VAMART_STORE) return;
+  const filtroStore = locatorFiltroStore(page);
+  if (await filtroStore.count() > 0) {
+    console.log(`   Imposto filtro "Store" = "${VAMART_STORE}"...`);
+    await filtroStore.selectOption({ label: VAMART_STORE });
+  } else {
+    console.log('   [attenzione] VAMART_STORE impostato ma nessun dropdown "Store" trovato su questa pagina: proseguo senza toccarlo.');
+  }
 }
 
 // Individua il campo data (testo libero, formato gg/mm/aaaa) che segue una
@@ -135,6 +170,7 @@ async function scaricaCsv() {
 
       console.log('   Imposto filtro "Commissioni Assistenza" = "Solo di assistenza"...');
       await locatorFiltroAssistenza(page).selectOption({ label: "Solo di assistenza" });
+      await impostaFiltroStoreSeRichiesto(page);
       await page.getByRole("button", { name: "Filtra" }).click();
       await page.waitForLoadState("networkidle");
       await debugScreenshot(page, "commissioni-dopo-filtro");
@@ -176,6 +212,11 @@ async function scaricaCsv() {
         vaFiltrato = true;
       } else {
         console.log('   [attenzione] Nessun dropdown "Commissioni Assistenza" trovato su questa pagina: proseguo senza toccarlo.');
+      }
+
+      if (VAMART_STORE) {
+        await impostaFiltroStoreSeRichiesto(page);
+        vaFiltrato = true;
       }
 
       // IMPORTANTE (bug scoperto il 11/07/2026): la pagina Piano di Carico ha

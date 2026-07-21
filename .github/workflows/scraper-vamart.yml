@@ -216,6 +216,10 @@ jobs:
           GESTIONALE_URL: ${{ secrets.VAMART_URL_FEBAL }}
           GESTIONALE_USER: ${{ secrets.VAMART_USER }}
           GESTIONALE_PASS: ${{ secrets.VAMART_PASS }}
+          # Istanza condivisa da piu' negozi: senza questo filtro esplicito
+          # l'export prende i dati di qualunque Store fosse gia' impostato
+          # nella sessione, non solo Febal Casa (bug scoperto il 21/07/2026).
+          VAMART_STORE: "Febal Casa"
         run: npm run download
 
       - name: Installa dipendenze importatore
