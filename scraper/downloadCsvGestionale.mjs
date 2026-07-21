@@ -117,6 +117,31 @@ async function impostaFiltroStoreSeRichiesto(page) {
   }
 }
 
+// Filtro "Commissioni Archiviate" sulla pagina Commissioni: come Store e
+// Commissioni Assistenza, resta su qualunque valore avesse la sessione
+// precedente se non lo si imposta esplicitamente (bug scoperto il
+// 21/07/2026). Senza forzarlo su "Solo non archiviate", il CSV include
+// anche commissioni gia' archiviate: importCommissioniAssistenza.mjs le
+// tratta come "non ancora tracciate" e ricrea pratiche "grezze" per
+// commissioni che erano state giustamente cancellate perche' non piu'
+// attive su Vamart, facendole ricomparire ad ogni giro dello scraper.
+function locatorFiltroArchiviate(page) {
+  return page.locator(
+    'xpath=//label[contains(normalize-space(.),"Commissioni Archiviate")]/following::select[1] ' +
+    '| //*[contains(normalize-space(text()),"Commissioni Archiviate")]/following::select[1]'
+  ).first();
+}
+
+async function impostaFiltroNonArchiviate(page) {
+  const filtroArchiviate = locatorFiltroArchiviate(page);
+  if (await filtroArchiviate.count() > 0) {
+    console.log('   Imposto filtro "Commissioni Archiviate" = "Solo non archiviate"...');
+    await filtroArchiviate.selectOption({ label: "Solo non archiviate" });
+  } else {
+    console.log('   [attenzione] Nessun dropdown "Commissioni Archiviate" trovato su questa pagina: proseguo senza toccarlo.');
+  }
+}
+
 // Individua il campo data (testo libero, formato gg/mm/aaaa) che segue una
 // certa etichetta: usato per "Dalla/Alla Data Commissione" nel Piano di
 // Carico (vedi commento piu' sotto sul perche' e' fondamentale azzerarli).
@@ -170,6 +195,7 @@ async function scaricaCsv() {
 
       console.log('   Imposto filtro "Commissioni Assistenza" = "Solo di assistenza"...');
       await locatorFiltroAssistenza(page).selectOption({ label: "Solo di assistenza" });
+      await impostaFiltroNonArchiviate(page);
       await impostaFiltroStoreSeRichiesto(page);
       await page.getByRole("button", { name: "Filtra" }).click();
       await page.waitForLoadState("networkidle");
