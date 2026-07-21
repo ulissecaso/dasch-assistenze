@@ -180,6 +180,86 @@ async function riclassificaAdAssistenza(supabase, praticaEsistente, codiceCommis
   }
 }
 
+// Chiude automaticamente le pratiche di assistenza che non compaiono piu'
+// tra le commissioni "solo assistenza, non archiviate" appena lette da
+// Vamart: significa che la commissione e' stata archiviata (consegna/lavoro
+// completato) o non esiste piu' con quel numero (es. cancellata e
+// ricreata sotto un altro id da un operatore). In entrambi i casi non deve
+// piu' ingombrare il Monitor Assistenza.
+//
+// Scope volutamente ristretto per sicurezza:
+//  - solo canale_origine 'manuale' o 'csv' (nate da un CSV Vamart, quindi il
+//    codice_commissione E' davvero un id Vamart confrontabile). Le pratiche
+//    canale_origine 'email'/'app' sono "in attesa" di un abbinamento futuro
+//    (vedi commento in cima al file, caso 1): il loro codice_commissione e'
+//    spesso il riferimento citato dal cliente, non un id Vamart reale, quindi
+//    non comparirebbe MAI in questo CSV anche se la pratica e' legittima e
+//    ancora da lavorare. Chiuderle per assenza sarebbe un errore.
+//  - stato_generale -> 'annullata', non 'chiusa': 'chiusa' resta riservato
+//    alle pratiche che hanno davvero completato il workflow (consegna
+//    materiale, chiusura_assistenza), cosi' i KPI "tempi medi"/"risolti
+//    oggi" non si sporcano con chiusure automatiche di pratiche stantie.
+// Se una quota troppo alta delle pratiche candidate risulterebbe da
+// chiudere in un colpo solo, e' molto piu' probabile un CSV dalla fonte
+// sbagliata (URL/store/login errato) che una vera ondata di archiviazioni:
+// in quel caso meglio bloccarsi e segnalare l'anomalia invece di annullare
+// in massa pratiche che magari sono ancora attive e lavorate ogni giorno
+// (caso reale riscontrato su Febal: export sbagliato -> quasi tutte le
+// pratiche sarebbero risultate "assenti").
+const SOGLIA_MINIMA_CANDIDATE = 10;
+const QUOTA_MASSIMA_CHIUSURA = 0.3; // 30%
+
+async function chiudiPraticheNonPiuAttiveSuVamart(supabase, brandId, codiciAttivi) {
+  const { data: candidate, error } = await supabase
+    .from("pratiche")
+    .select("id, codice_commissione, stato_generale, descrizione")
+    .eq("brand_id", brandId)
+    .eq("tipo", "assistenza")
+    .not("stato_generale", "in", "(chiusa,annullata)")
+    .in("canale_origine", ["manuale", "csv"]);
+  if (error) throw error;
+
+  const daChiudere = (candidate ?? []).filter((p) => !codiciAttivi.has((p.codice_commissione || "").trim()));
+
+  if (
+    (candidate ?? []).length >= SOGLIA_MINIMA_CANDIDATE &&
+    daChiudere.length > (candidate ?? []).length * QUOTA_MASSIMA_CHIUSURA
+  ) {
+    console.error(
+      `ATTENZIONE: chiusura automatica bloccata per sicurezza. ${daChiudere.length} pratiche su ${candidate.length} ` +
+      `(> ${QUOTA_MASSIMA_CHIUSURA * 100}%) risultano assenti dal CSV Commissioni assistenza: probabile CSV dalla ` +
+      `fonte sbagliata, non una vera ondata di archiviazioni. Nessuna pratica e' stata toccata da questo controllo.`
+    );
+    return { chiuse: 0, bloccato: true, candidateTotali: candidate.length, wouldBeChiuse: daChiudere.length };
+  }
+
+  const adesso = new Date().toISOString();
+
+  for (const p of daChiudere) {
+    const nota = `[chiusura automatica ${new Date().toLocaleString("it-IT")}] Commissione non piu' presente tra le commissioni di assistenza non archiviate su Vamart (probabile archiviazione o consegna gia' completata altrove).`;
+    const { error: erroreUpdate } = await supabase
+      .from("pratiche")
+      .update({
+        stato_generale: "annullata",
+        data_chiusura_effettiva: adesso,
+        descrizione: p.descrizione ? `${p.descrizione}\n\n${nota}` : nota,
+      })
+      .eq("id", p.id);
+    if (erroreUpdate) throw erroreUpdate;
+
+    await supabase.from("storico_modifiche").insert({
+      entita: "pratiche",
+      entita_id: p.id,
+      campo: "stato_generale",
+      valore_precedente: p.stato_generale,
+      valore_nuovo: "annullata",
+      origine: "automazione",
+    });
+  }
+
+  return { chiuse: daChiudere.length, bloccato: false, candidateTotali: (candidate ?? []).length, wouldBeChiuse: daChiudere.length };
+}
+
 function leggiCsv(percorsoFile) {
   const contenuto = readFileSync(percorsoFile, "utf8");
   const righeGrezze = parse(contenuto, {
@@ -449,6 +529,23 @@ async function main() {
     }
   }
 
+  // Ultimo passo: chiude le pratiche di assistenza (canale Vamart, non le
+  // "in attesa" da mail/app) che sono sparite da questo stesso CSV rispetto
+  // all'ultimo giro - vedi chiudiPraticheNonPiuAttiveSuVamart piu' sopra.
+  const codiciAttivi = new Set(righe.map((r) => (r.idCommissione || "").trim()).filter(Boolean));
+  const risultatoChiusura = await chiudiPraticheNonPiuAttiveSuVamart(supabase, brandId, codiciAttivi);
+  if (risultatoChiusura.bloccato) {
+    await supabase.from("importazioni_csv_errori").insert({
+      importazione_id: importazione.id,
+      numero_riga: 0,
+      messaggio_errore:
+        `Chiusura automatica bloccata per sicurezza: ${risultatoChiusura.wouldBeChiuse} pratiche su ` +
+        `${risultatoChiusura.candidateTotali} risulterebbero assenti dal CSV Commissioni assistenza ` +
+        `(> ${QUOTA_MASSIMA_CHIUSURA * 100}%). Probabile CSV dalla fonte sbagliata: verificare manualmente prima di procedere.`,
+      dato_grezzo: null,
+    });
+  }
+
   await supabase
     .from("importazioni_csv")
     .update({
@@ -467,7 +564,9 @@ async function main() {
 
   console.log(
     `Import completata. Pratiche nuove: ${nuove}, ricollegate a segnalazioni via mail: ${ricollegate}, ` +
-    `riclassificate da 'consegna' ad 'assistenza': ${riclassificate}, gia' presenti: ${giaPresenti}, errori: ${errori}`
+    `riclassificate da 'consegna' ad 'assistenza': ${riclassificate}, gia' presenti: ${giaPresenti}, errori: ${errori}, ` +
+    `chiuse automaticamente (non piu' attive su Vamart): ${risultatoChiusura.chiuse}` +
+    (risultatoChiusura.bloccato ? " [BLOCCATA PER SICUREZZA, vedi importazioni_csv_errori]" : "")
   );
 }
 
