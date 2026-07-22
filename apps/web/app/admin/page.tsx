@@ -57,7 +57,7 @@ export default async function AdminPage({
 
   let queryPratiche = supabase
     .from("pratiche")
-    .select("id, codice_commissione, stato_generale, created_at, clienti(nome_completo), utenti:operatore_assegnato_id(nome, cognome)")
+    .select("id, codice_commissione, stato_generale, created_at, clienti(nome_completo), utenti:operatore_assegnato_id(nome, cognome), brands(nome, colore)")
     .order("created_at", { ascending: false })
     .limit(50);
   if (filtroPratiche) {
@@ -396,7 +396,7 @@ export default async function AdminPage({
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-gray-500">
-              <th className="py-1">Pratica</th><th>Cliente</th><th>Operatore</th><th>Stato</th><th>Aperta il</th><th></th>
+              <th className="py-1">Pratica</th><th>Cliente</th><th>Marchio</th><th>Operatore</th><th>Stato</th><th>Aperta il</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -406,6 +406,19 @@ export default async function AdminPage({
                   <a href={`/pratiche/${p.id}`} className="text-blue-700 underline">{p.codice_commissione}</a>
                 </td>
                 <td>{p.clienti?.nome_completo ?? "—"}</td>
+                <td>
+                  {p.brands ? (
+                    <span
+                      className="inline-flex items-center gap-1.5 text-xs px-1.5 py-0.5 rounded"
+                      style={{ color: p.brands.colore, borderColor: p.brands.colore, borderWidth: 1 }}
+                    >
+                      <span className="inline-block w-2 h-2 rounded-full" style={{ background: p.brands.colore }} />
+                      {p.brands.nome}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td>{p.utenti ? `${p.utenti.nome} ${p.utenti.cognome}` : "Non assegnato"}</td>
                 <td>
                   <span className={p.stato_generale === "annullata" ? "text-red-600 font-medium" : ""}>
@@ -443,7 +456,7 @@ export default async function AdminPage({
               </tr>
             ))}
             {(pratiche ?? []).length === 0 && (
-              <tr><td colSpan={6} className="py-2 text-gray-400">Nessuna pratica trovata{filtroPratiche ? " per questa ricerca" : ""}.</td></tr>
+              <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna pratica trovata{filtroPratiche ? " per questa ricerca" : ""}.</td></tr>
             )}
           </tbody>
         </table>
