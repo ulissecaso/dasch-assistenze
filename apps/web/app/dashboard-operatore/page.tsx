@@ -8,10 +8,9 @@
 // scorrere con la rotella del mouse tutto il proprio elenco (anche centinaia
 // di pratiche), quindi passiamo a MonitorBoard il numero vero di righe
 // invece di un tetto fisso.
-import { redirect } from "next/navigation";
 import { richiediUtente } from "@/lib/auth/richiediUtente";
 import MonitorBoard, { type AlertRigaMonitor, type OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce } from "@/lib/monitor/mappature";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce, praticaEspositivaDaEscludere } from "@/lib/monitor/mappature";
 
 export const dynamic = "force-dynamic"; // pagina protetta e specifica per utente: mai cache statica/ISR
 
@@ -21,29 +20,18 @@ function oggiIso() {
 
 export default async function DashboardOperatorePage() {
   const { supabase, user } = await richiediUtente();
-
-  // Il supervisore non è mai "operatore_assegnato_id" di nessuna pratica (è un
-  // ruolo di sola visione, non di lavorazione): se qualcuno con questo ruolo
-  // arriva qui (link vecchio, URL digitato a mano, ecc.) la pagina sarebbe
-  // sempre vuota. Meglio rimandarlo subito a dove i suoi dati esistono
-  // davvero: il Monitoraggio Assistenze, filtrato sul suo brand via RLS.
-  const { data: profiloRuolo } = await supabase.from("utenti").select("ruolo").eq("id", user.id).maybeSingle();
-  if (profiloRuolo?.ruolo === "supervisore") {
-    redirect("/dashboard-direzione");
-  }
-
   const adesso = new Date().toISOString();
   const adessoMs = Date.now();
   const oggi = oggiIso();
 
-  const [{ data: profilo }, { data: faseRitardo }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }, { data: brandsAttivi }, { data: regoleOperatore }] = await Promise.all([
+  const [{ data: profilo }, { data: faseRitardo }, { data: praticheAperteRaw }, { data: risoltiOggiRaw }, { data: regoleAttive }] = await Promise.all([
     supabase.from("utenti").select("nome, cognome, colore_badge").eq("id", user.id).maybeSingle(),
     supabase
       .from("pratica_fasi")
       .select(`
         id, stato, data_prevista, fase_id,
         fasi_workflow(codice, nome),
-        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id,
           clienti(nome_completo),
           brands(codice, nome, colore)
         )
@@ -52,42 +40,24 @@ export default async function DashboardOperatorePage() {
       .lt("data_prevista", adesso)
       .eq("pratiche.operatore_assegnato_id", user.id)
       .order("data_prevista", { ascending: true })
-      // Era limit(500): con operatori che hanno molte pratiche vecchie
-      // (es. arretrato Cinquegrana), l'ordine "più scaduta prima" tagliava
-      // fuori le pratiche più recenti (es. Master Mobili appena importate,
-      // priorità bassa) che finivano oltre le prime 500. Il commento in
-      // cima al file dice esplicitamente "qui NON limitiamo le righe": 5000
-      // è di fatto un tetto di sicurezza, non un limite operativo reale.
-      .limit(5000),
-    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).not("stato_generale", "in", '("chiusa","annullata")'),
-    supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("operatore_assegnato_id", user.id).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
+      .limit(500),
+    // Niente piu' count "head:true": serve il nome cliente per poter escludere
+    // le commesse mostra/negozio/expo anche da queste due statistiche (vedi
+    // praticaEspositivaDaEscludere in mappature.ts), quindi si conta in JS.
+    supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").eq("operatore_assegnato_id", user.id).not("stato_generale", "in", '("chiusa","annullata")'),
+    supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").eq("operatore_assegnato_id", user.id).eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
-    // Brand su cui QUESTO operatore è abilitato (non solo quelli con almeno
-    // un alert in ritardo in questo momento): serve per mostrare sempre i
-    // pulsanti di filtro "Tutti i brand / Cinquegrana / Master Mobili" a chi
-    // è abilitato su più di un brand, anche quando in questo istante ha in
-    // ritardo solo pratiche di uno di essi.
-    supabase
-      .from("operatore_brand")
-      .select("brands(codice, nome, colore)")
-      .eq("operatore_id", user.id)
-      .eq("attivo", true),
-    // Tipi di pratica (assistenza/consegna) su cui QUESTO operatore è
-    // abilitato tramite regole di assegnazione attive: serve per mostrare
-    // sempre i pulsanti "Insieme / Solo Assistenza / Solo Consegne" a chi
-    // segue entrambi i moduli (es. l'operatore unico di Febal), anche quando
-    // in questo istante ha in ritardo solo pratiche di un tipo.
-    supabase
-      .from("regole_assegnazione")
-      .select("tipo_pratica")
-      .eq("operatore_id", user.id)
-      .eq("attiva", true),
   ]);
+
+  const praticheTotali = (praticheAperteRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
+  const risoltiOggi = (risoltiOggiRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
 
+  // Esclude anche le commesse di allestimento mostra/negozio/expo: vedi
+  // praticaEspositivaDaEscludere in mappature.ts.
   const righeConLivello = (faseRitardo ?? [])
-    .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale))
+    .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale) && !praticaEspositivaDaEscludere(r.pratiche))
     .map((r: any) => {
       const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
       return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };
@@ -113,12 +83,16 @@ export default async function DashboardOperatorePage() {
   // assegnate a questo operatore. Non e' una vera fase in ritardo (la fase
   // "pianificazione_consegna" resta "da_iniziare" finche' non arriva il
   // 100%), quindi va costruita a parte incrociando la stessa vista.
-  const { data: praticheConsegnaOperatore } = await supabase
+  const { data: praticheConsegnaOperatoreRaw } = await supabase
     .from("pratiche")
     .select("id, codice_commissione, data_consegna_prevista, clienti(nome_completo), brands(codice, nome, colore)")
     .eq("tipo", "consegna")
     .eq("operatore_assegnato_id", user.id)
     .not("stato_generale", "in", '("chiusa","annullata")');
+
+  // Esclude anche le commesse di allestimento mostra/negozio/expo: vedi
+  // praticaEspositivaDaEscludere in mappature.ts.
+  const praticheConsegnaOperatore = (praticheConsegnaOperatoreRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p));
 
   const idGiaInCorsoConsegna = new Set(
     righeConLivello.filter((r: any) => r.fasi_workflow?.codice === "pianificazione_consegna").map((r: any) => r.pratiche.id)
@@ -167,7 +141,6 @@ export default async function DashboardOperatorePage() {
       operatoreColore: opColore,
       azione: AZIONE_PER_FASE[fw?.codice] ?? "Verificare fase",
       brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
-      tipo: p.tipo,
     };
   });
 
@@ -194,7 +167,6 @@ export default async function DashboardOperatorePage() {
         operatoreColore: opColore,
         azione: "Valutare consegna parziale o sollecitare il fornitore",
         brand: p.brands ? { codice: p.brands.codice, nome: p.brands.nome, colore: p.brands.colore } : undefined,
-        tipo: "consegna" as const,
       };
     });
 
@@ -220,14 +192,6 @@ export default async function DashboardOperatorePage() {
   const scaduti = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
   const inScadenzaOggi = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
-  const brandsOperatore = (brandsAttivi ?? [])
-    .map((ob: any) => ob.brands)
-    .filter(Boolean) as { codice: string; nome: string; colore: string }[];
-
-  const tipiOperatore = Array.from(
-    new Set((regoleOperatore ?? []).map((r: any) => r.tipo_pratica).filter(Boolean))
-  ) as ("assistenza" | "consegna")[];
-
   return (
     <div className="h-screen overflow-hidden p-3">
       <MonitorBoard
@@ -245,8 +209,6 @@ export default async function DashboardOperatorePage() {
         messaggioVuoto="Nessuna pratica in ritardo al momento: sei in linea con tutte le scadenze."
         mostraSelettoreSchermoIntero={false}
         righeMax={Math.max(alertRows.length, 1)}
-        brandsAttivi={brandsOperatore}
-        tipiAttivi={tipiOperatore}
       />
     </div>
   );
