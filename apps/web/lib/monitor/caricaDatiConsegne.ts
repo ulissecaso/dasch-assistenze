@@ -16,7 +16,7 @@
 //     parte incrociando v_percentuale_merce_arrivata sulle pratiche di
 //     consegna ancora aperte, e mostrato con livello fisso "media".
 import type { AlertRigaMonitor, OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo } from "@/lib/monitor/mappature";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, praticaEspositivaDaEscludere } from "@/lib/monitor/mappature";
 import { caricaAvvisiImportazione } from "@/lib/monitor/caricaAvvisiImportazione";
 
 const FASI_CONSEGNA = ["pianificazione_consegna", "pagamento"];
@@ -56,9 +56,9 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
     { data: operatoriRegoleGrezze },
     { data: faseConteggio },
     { data: faseTabella },
-    { data: praticheConsegnaAperte },
-    { count: praticheTotali },
-    { count: risoltiOggi },
+    { data: praticheConsegnaApertaRaw },
+    { data: praticheAperteRaw },
+    { data: risoltiOggiRaw },
     { data: regoleAttive },
     { data: brandsGrezzi },
   ] = await Promise.all([
@@ -80,7 +80,7 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
         .select(`
         id, data_prevista, fase_id,
         fasi_workflow!inner(codice),
-        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo, brand_id)
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo, brand_id, clienti(nome_completo))
       `)
         .eq("stato", "in_corso")
         .eq("pratiche.tipo", "consegna")
@@ -116,12 +116,15 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
         .not("stato_generale", "in", '("chiusa","annullata")'),
       "brand_id"
     ),
+    // Niente piu' count "head:true": serve il nome cliente per poter escludere
+    // le commesse mostra/negozio/expo anche da queste due statistiche (vedi
+    // praticaEspositivaDaEscludere in mappature.ts), quindi si conta in JS.
     conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "consegna").not("stato_generale", "in", '("chiusa","annullata")'),
+      supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").eq("tipo", "consegna").not("stato_generale", "in", '("chiusa","annullata")'),
       "brand_id"
     ),
     conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "consegna").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
+      supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").eq("tipo", "consegna").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggi}T00:00:00Z`),
       "brand_id"
     ),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
@@ -131,6 +134,12 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
     // un solo brand.
     supabase.from("brands").select("codice, nome, colore").eq("attivo", true),
   ]);
+
+  // Esclude anche le commesse di allestimento mostra/negozio/expo dall'elenco
+  // pratiche di consegna aperte (usato per l'avviso "merce parziale").
+  const praticheConsegnaAperte = (praticheConsegnaApertaRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p));
+  const praticheTotali = (praticheAperteRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
+  const risoltiOggi = (risoltiOggiRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
 
   const operatoriRegole = (operatoriRegoleGrezze ?? []).filter((r: any) => {
     if (idSolo.length > 0) return r.brand_id && idSolo.includes(r.brand_id);
@@ -148,7 +157,7 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
 
   const conLivello = (righe: any[] | null | undefined) =>
     (righe ?? [])
-      .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale))
+      .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale) && !praticaEspositivaDaEscludere(r.pratiche))
       .map((r: any) => {
         const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
         return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };

@@ -6,7 +6,7 @@
 // utente o service role, indifferentemente) così la logica di calcolo resta
 // un'unica fonte di verità.
 import type { AlertRigaMonitor, OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce } from "@/lib/monitor/mappature";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce, praticaEspositivaDaEscludere } from "@/lib/monitor/mappature";
 import { caricaAvvisiImportazione } from "@/lib/monitor/caricaAvvisiImportazione";
 
 function oggiIso() {
@@ -48,7 +48,7 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     return query;
   };
 
-  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegoleGrezze }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }, { data: brandsGrezzi }] = await Promise.all([
+  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegoleGrezze }, { data: praticheAperteRaw }, { data: risoltiOggiRaw }, { data: regoleAttive }, { data: brandsGrezzi }] = await Promise.all([
     // Query "conteggio": alimenta le card per operatore e le statistiche
     // (scaduti, in scadenza oggi, urgenti...). Volutamente SENZA il limite
     // usato per la tabella: se la limitassimo, un operatore con tante fasi
@@ -61,7 +61,7 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
         .from("pratica_fasi")
         .select(`
         id, data_prevista, fase_id,
-        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo, brand_id)
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo, brand_id, clienti(nome_completo))
       `)
         .in("stato", ["da_iniziare", "in_corso"])
         .lt("data_prevista", adesso)
@@ -107,12 +107,15 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     // con dati dell'altro modulo (stessa distinzione gia' corretta in
     // caricaDatiConsegne.ts, che filtra sempre tipo='consegna' sui conteggi
     // equivalenti).
+    // Niente piu' count "head:true": serve il nome cliente per poter escludere
+    // le commesse mostra/negozio/expo anche da queste due statistiche (vedi
+    // praticaEspositivaDaEscludere in mappature.ts), quindi si conta in JS.
     conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "assistenza").not("stato_generale", "in", '("chiusa","annullata")'),
+      supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").eq("tipo", "assistenza").not("stato_generale", "in", '("chiusa","annullata")'),
       "brand_id"
     ),
     conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "assistenza").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
+      supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").eq("tipo", "assistenza").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
       "brand_id"
     ),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
@@ -123,6 +126,9 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     // idea di brandsAttivi in dashboard-operatore/page.tsx).
     supabase.from("brands").select("codice, nome, colore").eq("attivo", true),
   ]);
+
+  const praticheTotali = (praticheAperteRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
+  const risoltiOggi = (risoltiOggiRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
 
   // Filtra le regole (quindi gli operatori-card) in base allo stesso criterio
   // brand: in modalita' "escludi" tiene le regole generiche (brand_id nullo,
@@ -151,7 +157,7 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
   // relazione embedded direttamente nella query.
   const conLivello = (righe: any[] | null | undefined) =>
     (righe ?? [])
-      .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale))
+      .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale) && !praticaEspositivaDaEscludere(r.pratiche))
       .map((r: any) => {
         const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
         return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };

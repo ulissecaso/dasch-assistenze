@@ -10,6 +10,7 @@ import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratic
 import UploadCsvForm from "@/components/admin/UploadCsvForm";
 import UploadCsvCommissioniForm from "@/components/admin/UploadCsvCommissioniForm";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
+import { praticaEspositivaDaEscludere } from "@/lib/monitor/mappature";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +111,14 @@ export default async function AdminPage({
     supabase.from("brands").select("*").order("nome"),
     supabase.from("operatore_brand").select("operatore_id, brand_id, attivo"),
   ]);
+
+  // Elenco "Gestione pratiche": nascondiamo SEMPRE le commesse di
+  // allestimento mostra/negozio/expo (vedi praticaEspositivaDaEscludere in
+  // mappature.ts), sia nell'elenco di default sia nei risultati di ricerca:
+  // su richiesta esplicita, non devono comparire nemmeno cercando "mostra"
+  // o "expo" per nome. Se un giorno serve gestirne una, va cercata/aperta
+  // direttamente dal database, non da qui.
+  const praticheVisibili = (pratiche ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p));
 
   const erroriQuery = [
     erroreOperatori && `utenti: ${erroreOperatori.message}`,
@@ -400,7 +409,7 @@ export default async function AdminPage({
             </tr>
           </thead>
           <tbody>
-            {(pratiche ?? []).map((p: any) => (
+            {praticheVisibili.map((p: any) => (
               <tr key={p.id} className="border-t">
                 <td className="py-1">
                   <a href={`/pratiche/${p.id}`} className="text-blue-700 underline">{p.codice_commissione}</a>
@@ -455,13 +464,14 @@ export default async function AdminPage({
                 </td>
               </tr>
             ))}
-            {(pratiche ?? []).length === 0 && (
+            {praticheVisibili.length === 0 && (
               <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna pratica trovata{filtroPratiche ? " per questa ricerca" : ""}.</td></tr>
             )}
           </tbody>
         </table>
         <p className="text-xs text-gray-400 mt-2">
           Mostrate al massimo 50 pratiche{filtroPratiche ? " per questa ricerca" : " (le più recenti)"}: usa la ricerca per trovarne altre.
+          {" "}Le commesse mostra/negozio/expo sono sempre nascoste, anche nei risultati di ricerca.
         </p>
       </section>
 
