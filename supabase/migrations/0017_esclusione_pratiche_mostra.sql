@@ -43,6 +43,7 @@ begin
 end;
 $$ language plpgsql;
 
+drop trigger if exists trg_pratiche_escludi_mostra on pratiche;
 create trigger trg_pratiche_escludi_mostra
   before insert on pratiche
   for each row execute function trg_fn_escludi_pratiche_mostra();
