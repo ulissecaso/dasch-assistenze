@@ -112,15 +112,13 @@ export default async function AdminPage({
     supabase.from("operatore_brand").select("operatore_id, brand_id, attivo"),
   ]);
 
-  // Elenco "Gestione pratiche": nascondiamo di default le commesse di
+  // Elenco "Gestione pratiche": nascondiamo SEMPRE le commesse di
   // allestimento mostra/negozio/expo (vedi praticaEspositivaDaEscludere in
-  // mappature.ts), stesso filtro applicato alle dashboard. Se pero' l'admin
-  // sta cercando qualcosa esplicitamente (barra di ricerca sopra la
-  // tabella), mostriamo comunque tutti i risultati corrispondenti: potrebbe
-  // aver bisogno di riaprire/gestire proprio una di quelle pratiche.
-  const praticheVisibili = filtroPratiche
-    ? (pratiche ?? [])
-    : (pratiche ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p));
+  // mappature.ts), sia nell'elenco di default sia nei risultati di ricerca:
+  // su richiesta esplicita, non devono comparire nemmeno cercando "mostra"
+  // o "expo" per nome. Se un giorno serve gestirne una, va cercata/aperta
+  // direttamente dal database, non da qui.
+  const praticheVisibili = (pratiche ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p));
 
   const erroriQuery = [
     erroreOperatori && `utenti: ${erroreOperatori.message}`,
@@ -473,7 +471,7 @@ export default async function AdminPage({
         </table>
         <p className="text-xs text-gray-400 mt-2">
           Mostrate al massimo 50 pratiche{filtroPratiche ? " per questa ricerca" : " (le più recenti)"}: usa la ricerca per trovarne altre.
-          {!filtroPratiche && " Le commesse mostra/negozio/expo sono nascoste di default: cercale per nome o codice per trovarle."}
+          {" "}Le commesse mostra/negozio/expo sono sempre nascoste, anche nei risultati di ricerca.
         </p>
       </section>
 
