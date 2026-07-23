@@ -3,11 +3,12 @@
 import { creaSupabaseClientServer } from "@/lib/supabase/server";
 import { aggiornaRegoleFase } from "./sla-actions";
 import { separaGiorniOre } from "./sla-utils";
-import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore } from "./operatori-actions";
+import { creaOperatore, creaAdmin, alternaAttivoUtente, cambiaPasswordAdmin, rigeneraCodiceOperatore, eliminaOperatore } from "./operatori-actions";
 import { creaRegolaAssegnazione, alternaAttivaRegola, eliminaRegolaAssegnazione } from "./regole-actions";
-import { alternaAbilitazioneBrand } from "./brand-actions";
+import { alternaAbilitazioneBrand, alternaRichiedeConsegnaBrand, creaBrand } from "./brand-actions";
 import { alternaAnnullataPratica, eliminaDefinitivamentePratica } from "./pratiche-actions";
 import UploadCsvForm from "@/components/admin/UploadCsvForm";
+import UploadCsvCommissioniForm from "@/components/admin/UploadCsvCommissioniForm";
 import { richiediAdmin } from "@/lib/auth/richiediUtente";
 import { praticaEspositivaDaEscludere } from "@/lib/monitor/mappature";
 
@@ -57,7 +58,7 @@ export default async function AdminPage({
 
   let queryPratiche = supabase
     .from("pratiche")
-    .select("id, codice_commissione, stato_generale, created_at, clienti(nome_completo), utenti:operatore_assegnato_id(nome, cognome)")
+    .select("id, codice_commissione, stato_generale, created_at, clienti(nome_completo), utenti:operatore_assegnato_id(nome, cognome), brands(nome, colore)")
     .order("created_at", { ascending: false })
     .limit(50);
   if (filtroPratiche) {
@@ -96,14 +97,16 @@ export default async function AdminPage({
     { data: regoleAssegnazione, error: erroreRegoleAssegnazione },
     { data: regoleAlert, error: erroreRegoleAlert },
     { data: importazioni, error: erroreImportazioni },
+    { data: importazioniEmail, error: erroreImportazioniEmail },
     { data: pratiche, error: errorePratiche },
     { data: brands, error: erroreBrands },
     { data: operatoreBrand, error: erroreOperatoreBrand },
   ] = await Promise.all([
     supabase.from("utenti").select("*").order("cognome"),
-    supabase.from("regole_assegnazione").select("*, utenti(nome, cognome)").order("priorita"),
+    supabase.from("regole_assegnazione").select("*, utenti(nome, cognome), brands(nome, colore)").order("priorita"),
     supabase.from("regole_alert").select("*, fasi_workflow(nome, codice, ordine, tipo_pratica)").eq("attiva", true),
     supabase.from("importazioni_csv").select("*").order("iniziata_il", { ascending: false }).limit(20),
+    supabase.from("importazioni_email").select("*").order("created_at", { ascending: false }).limit(20),
     queryPratiche,
     supabase.from("brands").select("*").order("nome"),
     supabase.from("operatore_brand").select("operatore_id, brand_id, attivo"),
@@ -124,6 +127,7 @@ export default async function AdminPage({
     erroreRegoleAssegnazione && `regole_assegnazione: ${erroreRegoleAssegnazione.message}`,
     erroreRegoleAlert && `regole_alert: ${erroreRegoleAlert.message}`,
     erroreImportazioni && `importazioni_csv: ${erroreImportazioni.message}`,
+    erroreImportazioniEmail && `importazioni_email: ${erroreImportazioniEmail.message}`,
     errorePratiche && `pratiche: ${errorePratiche.message}`,
     erroreBrands && `brands: ${erroreBrands.message}`,
     erroreOperatoreBrand && `operatore_brand: ${erroreOperatoreBrand.message}`,
@@ -203,6 +207,15 @@ export default async function AdminPage({
               <span className="block text-xs text-gray-500">Priorità</span>
               <input type="number" name="priorita" defaultValue={100} className="w-full border rounded px-2 py-1" />
             </label>
+            <label className="md:col-span-2">
+              <span className="block text-xs text-gray-500">Brand</span>
+              <select name="brand_id" className="w-full border rounded px-2 py-1">
+                <option value="">Tutti i brand</option>
+                {(brands ?? []).map((b: any) => (
+                  <option key={b.id} value={b.id}>{b.nome}</option>
+                ))}
+              </select>
+            </label>
             <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5 md:col-span-1">
               Crea regola
             </button>
@@ -210,8 +223,78 @@ export default async function AdminPage({
         </details>
         <p className="text-xs text-gray-400 mt-3">
           Il criterio è sempre "iniziale del cognome del cliente": la pratica va all&apos;operatore la cui regola copre quella lettera.
-          Le modifiche si applicano immediatamente alle nuove pratiche.
+          Le modifiche si applicano immediatamente alle nuove pratiche. Scegli un brand specifico quando l&apos;operatore lavora
+          solo per quel brand (es. un nuovo brand con operatori propri): lasciare "Tutti i brand" farebbe valere la regola
+          anche per Cinquegrana/Master Mobili.
         </p>
+      </section>
+
+      <section className="bg-white rounded-xl shadow p-4">
+        <h2 className="text-lg font-medium mb-1">Brand</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Per ogni brand, scegli se una pratica di Assistenza deve aspettare anche la fase &quot;Consegna materiale&quot; prima di
+          potersi chiudere (comportamento storico, attivo di default), oppure se si chiude già quando il materiale risulta
+          arrivato in deposito — utile per un brand che non traccia una consegna separata (es. ritiro diretto in negozio).
+          Non tocca il modulo Consegne (le commissioni normali), che resta sempre presente per tutti i brand.
+        </p>
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-gray-500"><th>Brand</th><th>Consegna richiesta per chiudere l&apos;assistenza</th></tr></thead>
+          <tbody>
+            {(brands ?? []).map((b: any) => (
+              <tr key={b.id} className="border-t">
+                <td className="py-1.5">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: b.colore }} />
+                    {b.nome}
+                  </span>
+                </td>
+                <td>
+                  <form action={alternaRichiedeConsegnaBrand}>
+                    <input type="hidden" name="brand_id" value={b.id} />
+                    <input type="hidden" name="nuovo_stato" value={(!b.richiede_consegna_assistenza).toString()} />
+                    <button
+                      type="submit"
+                      className={`text-xs font-medium rounded-full px-3 py-1 border ${
+                        b.richiede_consegna_assistenza
+                          ? "bg-gray-900 text-white border-gray-900"
+                          : "text-gray-500 border-gray-300"
+                      }`}
+                      title={b.richiede_consegna_assistenza ? "Clicca per NON richiedere più la consegna" : "Clicca per richiedere di nuovo la consegna"}
+                    >
+                      {b.richiede_consegna_assistenza ? "Sì, richiesta" : "No, si chiude prima"}
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <details className="text-sm border rounded-lg p-3 mt-4">
+          <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo brand</summary>
+          <form action={creaBrand} className="mt-3 grid gap-3 md:grid-cols-4 items-end max-w-2xl">
+            <label>
+              <span className="block text-xs text-gray-500">Codice</span>
+              <input name="codice" required placeholder="FEBAL" className="w-full border rounded px-2 py-1 uppercase" />
+            </label>
+            <label className="md:col-span-2">
+              <span className="block text-xs text-gray-500">Nome</span>
+              <input name="nome" required placeholder="Febal" className="w-full border rounded px-2 py-1" />
+            </label>
+            <label>
+              <span className="block text-xs text-gray-500">Colore badge</span>
+              <input type="color" name="colore" defaultValue="#6366f1" className="w-full border rounded px-1 py-1 h-9" />
+            </label>
+            <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5 md:col-span-1">
+              Crea brand
+            </button>
+          </form>
+          <p className="text-xs text-gray-400 mt-2">
+            Il codice va in maiuscolo (es. "FEBAL") ed è quello da usare come BRAND_CODICE nello scraper Vamart e come
+            <code className="mx-1">?brand=</code> nel cron delle email. Dopo la creazione: abilita gli operatori giusti su questo
+            brand nella tabella "Operatori e utenti" più sotto, e crea le regole di assegnazione specifiche per questo brand.
+          </p>
+        </details>
       </section>
 
       <section className="bg-white rounded-xl shadow p-4">
@@ -254,6 +337,14 @@ export default async function AdminPage({
           non solo una volta — più spesso lo fai, più aggiornata resta la dashboard per gli operatori.
         </p>
         <UploadCsvForm />
+
+        <h3 className="text-sm font-medium mt-5 mb-1">Commissioni di assistenza</h3>
+        <p className="text-xs text-gray-400 mb-1">
+          Scarica dal filtro &quot;Solo di assistenza&quot; della pagina Commissioni di Vamart e caricalo qui: crea o
+          ricollega le pratiche di assistenza. In alternativa parte da solo ogni ora tramite lo scraper automatico.
+        </p>
+        <UploadCsvCommissioniForm />
+
         <table className="w-full text-sm mt-4">
           <thead><tr className="text-left text-gray-500"><th>File</th><th>Stato</th><th>Nuove</th><th>Aggiornate</th><th>Errori</th><th>Data</th></tr></thead>
           <tbody>
@@ -267,6 +358,30 @@ export default async function AdminPage({
                 <td>{new Date(i.iniziata_il).toLocaleString("it-IT")}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+
+        <h3 className="text-sm font-medium mt-6 mb-1">Segnalazioni ricevute via email</h3>
+        <p className="text-xs text-gray-400 mb-1">
+          Log di ogni mail letta automaticamente dalla casella segnalazioni (una volta al giorno). Se una riga è in errore, la
+          pratica NON è stata creata/aggiornata: stessi errori compaiono come avviso sul Monitoraggio Assistenze/Consegne finché
+          sono recenti (ultimi 3 giorni).
+        </p>
+        <table className="w-full text-sm mt-2">
+          <thead><tr className="text-left text-gray-500"><th>Oggetto</th><th>Mittente</th><th>Esito</th><th>Errore</th><th>Ricevuta il</th></tr></thead>
+          <tbody>
+            {(importazioniEmail ?? []).map((e: any) => (
+              <tr key={e.id} className="border-t">
+                <td className="py-1">{e.oggetto ?? "—"}</td>
+                <td className="text-gray-500">{e.mittente ?? "—"}</td>
+                <td className={e.esito === "errore" ? "text-red-600 font-medium" : ""}>{e.esito}</td>
+                <td className="text-red-600">{e.messaggio_errore ?? ""}</td>
+                <td>{e.ricevuta_il ? new Date(e.ricevuta_il).toLocaleString("it-IT") : (e.created_at ? new Date(e.created_at).toLocaleString("it-IT") : "—")}</td>
+              </tr>
+            ))}
+            {(importazioniEmail ?? []).length === 0 && (
+              <tr><td colSpan={5} className="py-2 text-gray-400">Nessuna segnalazione email ricevuta ancora.</td></tr>
+            )}
           </tbody>
         </table>
       </section>
@@ -292,7 +407,7 @@ export default async function AdminPage({
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-gray-500">
-              <th className="py-1">Pratica</th><th>Cliente</th><th>Operatore</th><th>Stato</th><th>Aperta il</th><th></th>
+              <th className="py-1">Pratica</th><th>Cliente</th><th>Marchio</th><th>Operatore</th><th>Stato</th><th>Aperta il</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -302,6 +417,19 @@ export default async function AdminPage({
                   <a href={`/pratiche/${p.id}`} className="text-blue-700 underline">{p.codice_commissione}</a>
                 </td>
                 <td>{p.clienti?.nome_completo ?? "—"}</td>
+                <td>
+                  {p.brands ? (
+                    <span
+                      className="inline-flex items-center gap-1.5 text-xs px-1.5 py-0.5 rounded"
+                      style={{ color: p.brands.colore, borderColor: p.brands.colore, borderWidth: 1 }}
+                    >
+                      <span className="inline-block w-2 h-2 rounded-full" style={{ background: p.brands.colore }} />
+                      {p.brands.nome}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td>{p.utenti ? `${p.utenti.nome} ${p.utenti.cognome}` : "Non assegnato"}</td>
                 <td>
                   <span className={p.stato_generale === "annullata" ? "text-red-600 font-medium" : ""}>
@@ -339,7 +467,7 @@ export default async function AdminPage({
               </tr>
             ))}
             {praticheVisibili.length === 0 && (
-              <tr><td colSpan={6} className="py-2 text-gray-400">Nessuna pratica trovata{filtroPratiche ? " per questa ricerca" : ""}.</td></tr>
+              <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna pratica trovata{filtroPratiche ? " per questa ricerca" : ""}.</td></tr>
             )}
           </tbody>
         </table>
@@ -404,7 +532,7 @@ export default async function AdminPage({
                     </button>
                   </form>
 
-                  {u.ruolo === "operatore" ? (
+                  {u.codice_accesso ? (
                     <form action={rigeneraCodiceOperatore}>
                       <input type="hidden" name="id" value={u.id} />
                       <button
@@ -434,6 +562,22 @@ export default async function AdminPage({
                       </form>
                     </details>
                   )}
+
+                  {!u.attivo && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-red-800">Elimina definitivamente</summary>
+                      <form action={eliminaOperatore} className="mt-1 flex flex-col items-start gap-1">
+                        <input type="hidden" name="id" value={u.id} />
+                        <label className="flex items-center gap-1 text-xs text-red-800">
+                          <input type="checkbox" name="conferma" value="si" required />
+                          Confermo: cancella per sempre {u.nome} {u.cognome}, non recuperabile
+                        </label>
+                        <button type="submit" className="bg-red-800 text-white text-xs rounded px-2 py-1">
+                          Elimina DEFINITIVAMENTE
+                        </button>
+                      </form>
+                    </details>
+                  )}
                 </td>
               </tr>
             ))}
@@ -445,9 +589,15 @@ export default async function AdminPage({
 
         <div className="grid gap-6 md:grid-cols-2">
           <details className="text-sm border rounded-lg p-3" open>
-            <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo operatore (accesso con codice)</summary>
+            <summary className="cursor-pointer text-gray-700 font-medium">+ Nuovo operatore/supervisore (accesso con codice)</summary>
             <form action={creaOperatore} className="mt-3 space-y-2">
-              <input type="hidden" name="ruolo" value="operatore" />
+              <label className="block">
+                <span className="block text-xs text-gray-500">Ruolo</span>
+                <select name="ruolo" defaultValue="operatore" className="w-full border rounded px-2 py-1">
+                  <option value="operatore">Operatore</option>
+                  <option value="supervisore">Supervisore (sola lettura, vede Monitoraggio Assistenze/Consegne di tutto il brand)</option>
+                </select>
+              </label>
               <label className="block">
                 <span className="block text-xs text-gray-500">Nome</span>
                 <input name="nome" required className="w-full border rounded px-2 py-1" />
@@ -457,10 +607,11 @@ export default async function AdminPage({
                 <input name="cognome" required className="w-full border rounded px-2 py-1" />
               </label>
               <button type="submit" className="bg-gray-900 text-white text-sm rounded px-3 py-1.5">
-                Crea operatore
+                Crea
               </button>
               <p className="text-xs text-gray-400">
-                Genera un codice univoco (visibile dopo nella tabella sopra, "mostra codice") da consegnare all&apos;operatore: lo userà per accedere all&apos;app, senza bisogno di una sua email.
+                Genera un codice univoco (visibile dopo nella tabella sopra, "mostra codice") da consegnare alla persona: lo userà per accedere all&apos;app, senza bisogno di una sua email.
+                Dopo la creazione, ricordati di abilitare i "Brand abilitati" giusti nella tabella sopra: un supervisore senza brand abilitati non vedrà nessuna pratica.
               </p>
             </form>
           </details>
@@ -509,7 +660,7 @@ export default async function AdminPage({
 function TabellaRegole({ regole }: { regole: any[] }) {
   return (
     <table className="w-full text-sm mb-4">
-      <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
+      <thead><tr className="text-left text-gray-500"><th>Nome</th><th>Criterio</th><th>Intervallo</th><th>Operatore</th><th>Brand</th><th>Priorità</th><th>Attiva</th><th></th></tr></thead>
       <tbody>
         {regole.map((r: any) => (
           <tr key={r.id} className="border-t">
@@ -517,6 +668,16 @@ function TabellaRegole({ regole }: { regole: any[] }) {
             <td>{r.criterio}</td>
             <td>{r.valore_da} - {r.valore_a}</td>
             <td>{r.utenti?.nome} {r.utenti?.cognome}</td>
+            <td>
+              {r.brands ? (
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: r.brands.colore }}>
+                  <span className="w-2 h-2 rounded-full inline-block" style={{ background: r.brands.colore }} />
+                  {r.brands.nome}
+                </span>
+              ) : (
+                <span className="text-xs text-gray-400">Tutti i brand</span>
+              )}
+            </td>
             <td>{r.priorita}</td>
             <td>{r.attiva ? "Sì" : "No"}</td>
             <td className="flex gap-3 py-1">
@@ -537,7 +698,7 @@ function TabellaRegole({ regole }: { regole: any[] }) {
           </tr>
         ))}
         {regole.length === 0 && (
-          <tr><td colSpan={7} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
+          <tr><td colSpan={8} className="py-2 text-gray-400">Nessuna regola configurata ancora.</td></tr>
         )}
       </tbody>
     </table>
