@@ -6,49 +6,17 @@
 // utente o service role, indifferentemente) così la logica di calcolo resta
 // un'unica fonte di verità.
 import type { AlertRigaMonitor, OperatoreCardMonitor } from "@/components/monitor/MonitorBoard";
-import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce } from "@/lib/monitor/mappature";
-import { caricaAvvisiImportazione } from "@/lib/monitor/caricaAvvisiImportazione";
+import { ICONA_PER_FASE, AZIONE_PER_FASE, coloreOperatore, formattaScadenza, costruisciMappaRegole, calcolaLivelloDaRitardo, etichettaArrivoMerce, praticaEspositivaDaEscludere } from "@/lib/monitor/mappature";
 
 function oggiIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// opzioni.escludiBrandCodici: brand da NASCONDERE (es. la dasch "generale" di
-// Cinquegrana/Master Mobili che non deve mostrare Febal, perche' Febal ha una
-// TV/monitor tutta sua ed e' un gruppo aziendale separato).
-// opzioni.soloBrandCodici: se presente, mostra SOLO questi brand (usato dalla
-// vista dedicata di Febal, /monitor/febal-assistenza).
-// Se nessuna delle due opzioni e' passata, il comportamento resta invariato
-// (tutti i brand visibili) - usato dalla dashboard-direzione autenticata, che
-// l'amministratore vuole continuare a vedere per intero, Febal incluso.
-type OpzioniFiltroBrand = { escludiBrandCodici?: string[]; soloBrandCodici?: string[] };
-
-async function risolviIdBrand(supabase: any, codici: string[]): Promise<string[]> {
-  if (!codici || codici.length === 0) return [];
-  const { data } = await supabase.from("brands").select("id").in("codice", codici);
-  return (data ?? []).map((b: any) => b.id);
-}
-
-export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroBrand = {}) {
+export async function caricaDatiDirezione(supabase: any) {
   const adesso = new Date().toISOString();
   const adessoMs = Date.now();
 
-  const [idEsclusi, idSolo] = await Promise.all([
-    risolviIdBrand(supabase, opzioni.escludiBrandCodici ?? []),
-    risolviIdBrand(supabase, opzioni.soloBrandCodici ?? []),
-  ]);
-  const listaSql = (ids: string[]) => `(${ids.join(",")})`;
-
-  // Applica il filtro brand (se presente) a una query gia' costruita, sia sul
-  // campo diretto "brand_id" (query su "pratiche") sia su quello annidato
-  // "pratiche.brand_id" (query su "pratica_fasi" con join pratiche!inner).
-  const conFiltroBrand = (query: any, campo: string) => {
-    if (idSolo.length > 0) return query.in(campo, idSolo);
-    if (idEsclusi.length > 0) return query.not(campo, "in", listaSql(idEsclusi));
-    return query;
-  };
-
-  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegoleGrezze }, { count: praticheTotali }, { count: risoltiOggi }, { data: regoleAttive }, { data: brandsGrezzi }] = await Promise.all([
+  const [{ data: faseRitardoConteggio }, { data: faseRitardoTabella }, { data: operatoriRegole }, { data: praticheAperteRaw }, { data: risoltiOggiRaw }, { data: regoleAttive }] = await Promise.all([
     // Query "conteggio": alimenta le card per operatore e le statistiche
     // (scaduti, in scadenza oggi, urgenti...). Volutamente SENZA il limite
     // usato per la tabella: se la limitassimo, un operatore con tante fasi
@@ -56,92 +24,56 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     // operatore risulterebbero troncati e sbagliati (visti anche solo 71 su
     // 241 reali per un operatore). Selezioniamo solo i campi indispensabili
     // per il conteggio, per tenere leggera una query senza limite di righe.
-    conFiltroBrand(
-      supabase
-        .from("pratica_fasi")
-        .select(`
+    supabase
+      .from("pratica_fasi")
+      .select(`
         id, data_prevista, fase_id,
-        pratiche!inner(id, stato_generale, operatore_assegnato_id, tipo, brand_id)
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo, clienti(nome_completo))
       `)
-        .in("stato", ["da_iniziare", "in_corso"])
-        .lt("data_prevista", adesso)
-        .eq("pratiche.tipo", "assistenza"),
-      "pratiche.brand_id"
-    ).limit(5000),
+      .in("stato", ["da_iniziare", "in_corso"])
+      .lt("data_prevista", adesso)
+      .eq("pratiche.tipo", "assistenza")
+      .limit(5000),
     // Query "tabella": righe da mostrare nel Monitor Assistenze, ordinate
     // dalla più urgente (più vecchia) in su. Questo limite serve solo a
     // contenere il payload della tabella: la vista a parete la taglia
     // ulteriormente a righeMax (11) tramite MonitorBoard.
-    conFiltroBrand(
-      supabase
-        .from("pratica_fasi")
-        .select(`
+    supabase
+      .from("pratica_fasi")
+      .select(`
         id, stato, data_prevista, fase_id,
         fasi_workflow(codice, nome),
-        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo, brand_id,
+        pratiche!inner(id, codice_commissione, stato_generale, operatore_assegnato_id, tipo,
           clienti(nome_completo),
           utenti:operatore_assegnato_id(id, nome, cognome, colore_badge),
           brands(codice, nome, colore)
         )
       `)
-        .in("stato", ["da_iniziare", "in_corso"])
-        .lt("data_prevista", adesso)
-        .eq("pratiche.tipo", "assistenza")
-        .order("data_prevista", { ascending: true }),
-      "pratiche.brand_id"
-    ).limit(300),
+      .in("stato", ["da_iniziare", "in_corso"])
+      .lt("data_prevista", adesso)
+      .eq("pratiche.tipo", "assistenza")
+      .order("data_prevista", { ascending: true })
+      .limit(300),
     // Operatori da mostrare come card: solo chi ha una regola di assegnazione
     // ATTIVA di tipo "assistenza" (stesso pattern di caricaDatiConsegne.ts).
     // Prima si prendevano TUTTI gli operatori attivi senza distinzione di
     // tipo, per cui operatori solo-Consegne (es. Francesca, Lucia)
-    // comparivano anche nel Monitor Assistenza con 0 alert. Il brand_id della
-    // regola viene filtrato in JS piu' sotto (vedi operatoriAssistenza).
+    // comparivano anche nel Monitor Assistenza con 0 alert.
     supabase
       .from("regole_assegnazione")
-      .select("brand_id, utenti:operatore_id(id, nome, cognome, colore_badge)")
+      .select("utenti:operatore_id(id, nome, cognome, colore_badge)")
       .eq("tipo_pratica", "assistenza")
       .eq("attiva", true),
-    // NOTA: qui manca "eq('tipo','assistenza')" mancava prima di questa
-    // correzione, quindi "Pratiche Totali" e "Risolti Oggi" sulla dashboard
-    // Assistenza contavano anche le pratiche di CONSEGNA, gonfiando i numeri
-    // con dati dell'altro modulo (stessa distinzione gia' corretta in
-    // caricaDatiConsegne.ts, che filtra sempre tipo='consegna' sui conteggi
-    // equivalenti).
-    conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "assistenza").not("stato_generale", "in", '("chiusa","annullata")'),
-      "brand_id"
-    ),
-    conFiltroBrand(
-      supabase.from("pratiche").select("*", { count: "exact", head: true }).eq("tipo", "assistenza").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
-      "brand_id"
-    ),
+    // Niente piu' count "head:true": serve il nome cliente per poter escludere
+    // le commesse mostra/negozio/expo anche da queste due statistiche (vedi
+    // praticaEspositivaDaEscludere in mappature.ts), quindi si conta in JS.
+    supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").not("stato_generale", "in", '("chiusa","annullata")'),
+    supabase.from("pratiche").select("codice_commissione, clienti(nome_completo)").eq("stato_generale", "chiusa").gte("data_chiusura_effettiva", `${oggiIso()}T00:00:00Z`),
     supabase.from("regole_alert").select("fase_id, soglia_valore, soglia_unita, livello").eq("attiva", true),
-    // Tutti i brand attivi (poi filtrati per escludi/solo qui sotto): serve
-    // per mostrare SEMPRE i pulsanti di filtro "Tutti i brand / Cinquegrana /
-    // Master Mobili" a chi guarda questa dashboard, anche quando in questo
-    // istante le pratiche in ritardo appartengono a un solo brand (stessa
-    // idea di brandsAttivi in dashboard-operatore/page.tsx).
-    supabase.from("brands").select("codice, nome, colore").eq("attivo", true),
   ]);
 
-  // Filtra le regole (quindi gli operatori-card) in base allo stesso criterio
-  // brand: in modalita' "escludi" tiene le regole generiche (brand_id nullo,
-  // valide per tutti i brand) e quelle di brand non esclusi; in modalita'
-  // "solo" tiene SOLO le regole del brand richiesto (una regola generica non
-  // e' specifica di quel brand, quindi non comparirebbe sulla TV dedicata).
-  const operatoriRegole = (operatoriRegoleGrezze ?? []).filter((r: any) => {
-    if (idSolo.length > 0) return r.brand_id && idSolo.includes(r.brand_id);
-    if (idEsclusi.length > 0) return !r.brand_id || !idEsclusi.includes(r.brand_id);
-    return true;
-  });
-
-  // Stesso filtro escludi/solo applicato sopra alle query dati, qui sui
-  // codici brand invece che sugli id (i brand arrivano gia' con il codice).
-  const brandsAttivi = (brandsGrezzi ?? []).filter((b: any) => {
-    if (opzioni.soloBrandCodici && opzioni.soloBrandCodici.length > 0) return opzioni.soloBrandCodici.includes(b.codice);
-    if (opzioni.escludiBrandCodici && opzioni.escludiBrandCodici.length > 0) return !opzioni.escludiBrandCodici.includes(b.codice);
-    return true;
-  }) as { codice: string; nome: string; colore: string }[];
+  const praticheTotali = (praticheAperteRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
+  const risoltiOggi = (risoltiOggiRaw ?? []).filter((p: any) => !praticaEspositivaDaEscludere(p)).length;
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
 
@@ -149,9 +81,11 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
   // una loro fase è rimasta con data_prevista scaduta: filtro qui perché
   // PostgREST non permette di filtrare comodamente su una colonna della
   // relazione embedded direttamente nella query.
+  // Esclude anche le commesse di allestimento mostra/negozio/expo: vedi
+  // praticaEspositivaDaEscludere in mappature.ts.
   const conLivello = (righe: any[] | null | undefined) =>
     (righe ?? [])
-      .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale))
+      .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale) && !praticaEspositivaDaEscludere(r.pratiche))
       .map((r: any) => {
         const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
         return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };
@@ -240,10 +174,6 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
   const scaduti = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
   const inScadenzaOggi = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
-  // Avvisi su problemi di alimentazione dati (import CSV Vamart o email di
-  // segnalazione): vedi lib/monitor/caricaAvvisiImportazione.ts.
-  const avvisiImportazione = await caricaAvvisiImportazione(supabase);
-
   return {
     alertRows,
     operatori,
@@ -255,7 +185,5 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
       risoltiOggi: risoltiOggi ?? 0,
       praticheTotali: praticheTotali ?? 0,
     },
-    avvisiImportazione,
-    brandsAttivi,
   };
 }
