@@ -136,3 +136,40 @@ export function formattaScadenza(dataIso: string): { data: string; ora: string }
     ora: d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
   };
 }
+
+/** Parole che, se presenti (anche come parte di un'altra parola: "compresa in
+ *  essa") nel codice commissione o nel nome cliente, escludono la pratica da
+ *  tutte le viste "dash" (Dashboard Direzione/Operatore e Monitor a parete,
+ *  sia Assistenza sia Consegne): sono le commesse di allestimento
+ *  mostra/negozio/fiera, che non fanno parte del flusso di assistenza post
+ *  vendita al cliente finale e intasavano gli alert. Il pannello admin
+ *  (/admin, gestione pratiche) NON applica questo filtro: li' devono restare
+ *  visibili e gestibili tutte le pratiche, comprese queste.
+ *  Confronto case-insensitive e "accent-insensitive" (expo/expò contano
+ *  uguali) tramite normalizzazione NFD. */
+const PAROLE_ESCLUSE_DASH = ["expo", "mostra", "negozio"];
+
+function normalizzaTesto(testo: string): string {
+  return testo
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+export function contieneParolaEsclusaDaDash(testo: string | null | undefined): boolean {
+  if (!testo) return false;
+  const t = normalizzaTesto(testo);
+  return PAROLE_ESCLUSE_DASH.some((parola) => t.includes(parola));
+}
+
+/** Vera se la pratica (codice commissione o nome cliente) va esclusa dalle
+ *  viste dash: vedi commento su PAROLE_ESCLUSE_DASH sopra. */
+export function praticaEspositivaDaEscludere(pratica: {
+  codice_commissione?: string | null;
+  clienti?: { nome_completo?: string | null } | null;
+}): boolean {
+  return (
+    contieneParolaEsclusaDaDash(pratica.codice_commissione) ||
+    contieneParolaEsclusaDaDash(pratica.clienti?.nome_completo)
+  );
+}
