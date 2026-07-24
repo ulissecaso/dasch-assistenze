@@ -212,11 +212,25 @@ export default async function DashboardOperatorePage() {
   // cima, bassa in fondo): alertRowsFasi era gia' ordinato da solo, ma la
   // semplice concatenazione con alertRowsParzialiConsegna (sempre "media")
   // rompeva l'ordine complessivo, es. mostrando "bassa" sopra "media".
-  const alertRows: AlertRigaMonitor[] = [...alertRowsFasi, ...alertRowsParzialiConsegna].sort((a, b) => {
+  const alertRowsConDuplicati: AlertRigaMonitor[] = [...alertRowsFasi, ...alertRowsParzialiConsegna].sort((a, b) => {
     const rangoA = RANGO_LIVELLO[a.livello as keyof typeof RANGO_LIVELLO];
     const rangoB = RANGO_LIVELLO[b.livello as keyof typeof RANGO_LIVELLO];
     if (rangoA !== rangoB) return rangoA - rangoB;
     return `${a.scadenzaData} ${a.scadenzaOra}`.localeCompare(`${b.scadenzaData} ${b.scadenzaOra}`);
+  });
+
+  // Stessa correzione applicata in caricaDatiDirezione.ts/caricaDatiConsegne.ts:
+  // una pratica puo' comparire piu' volte (piu' fasi scadute insieme, o una
+  // riga SLA vera piu' l'avviso "merce parziale" per la stessa pratica).
+  // Qui pero' NON viene usata alcuna delle due funzioni condivise (questa
+  // pagina costruisce le righe per conto suo, ristrette all'operatore
+  // loggato), quindi il fix va applicato anche qui separatamente. Teniamo
+  // una sola riga per pratica, la piu' urgente (array gia' ordinato).
+  const idPraticheGiaMostrate = new Set<string>();
+  const alertRows: AlertRigaMonitor[] = alertRowsConDuplicati.filter((r) => {
+    if (idPraticheGiaMostrate.has(r.praticaId)) return false;
+    idPraticheGiaMostrate.add(r.praticaId);
+    return true;
   });
 
   const operatori: OperatoreCardMonitor[] = [{
