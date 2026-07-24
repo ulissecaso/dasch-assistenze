@@ -36,6 +36,7 @@ export async function POST(req: NextRequest) {
       ricollegate: risultato.ricollegate,
       riclassificate: risultato.riclassificate,
       gia_presenti: risultato.giaPresenti,
+      escluse: risultato.escluse,
       errori: risultato.errori,
       stato: risultato.stato,
       messaggio: "Importazione completata.",

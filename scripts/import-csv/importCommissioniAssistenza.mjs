@@ -81,6 +81,24 @@ function normalizzaIntestazione(testo) {
   return String(testo || "").trim().toLowerCase();
 }
 
+// Le commissioni generate dai due arredatori dello store di Roma (colonna
+// "Venditore" del CSV Commissioni Vamart: "Martina Facchini" e "Iebba
+// Noemi") non vanno mai tracciate da questo sistema: lo store di Roma segue
+// l'assistenza dei propri clienti per conto suo, quindi importarle qui
+// creerebbe comunque pratiche/notifiche/assegnazioni automatiche (l'unica
+// esclusione gia' esistente, PAROLE_ESCLUSE_DASH in mappature.ts, nasconde
+// le righe solo nelle dashboard: non impedisce l'importazione ne' le
+// notifiche SLA ne' l'assegnazione operatore). Confronto case-insensitive e
+// con trim per non dipendere dalla formattazione esatta del CSV. Riguarda
+// solo il brand CINQUEGRANA (unico con lo store di Roma): Master Mobili e
+// Febal non vanno filtrati per questi nomi.
+const VENDITORI_ESCLUSI_CINQUEGRANA = ["martina facchini", "iebba noemi"];
+
+function venditoreEscluso(venditore) {
+  if (!venditore) return false;
+  return VENDITORI_ESCLUSI_CINQUEGRANA.includes(String(venditore).trim().toLowerCase());
+}
+
 // Riclassifica una pratica esistente (creata come 'consegna' dal Piano di
 // Carico prima che risultasse essere una commissione di assistenza) al
 // tipo 'assistenza'. Il trigger DB trg_fn_inizializza_fasi_pratica crea le
@@ -342,7 +360,7 @@ async function main() {
     .single();
   if (erroreImport) throw erroreImport;
 
-  let nuove = 0, ricollegate = 0, giaPresenti = 0, riclassificate = 0, errori = 0;
+  let nuove = 0, ricollegate = 0, giaPresenti = 0, riclassificate = 0, errori = 0, escluse = 0;
 
   for (const riga of righe) {
     try {
@@ -350,6 +368,17 @@ async function main() {
         throw new Error("Riga senza 'Id commissione', scartata");
       }
       const codiceCommissione = riga.idCommissione.trim();
+
+      // Store di Roma (vedi commento su VENDITORI_ESCLUSI_CINQUEGRANA piu'
+      // sopra): non creiamo/aggiorniamo nessuna pratica per queste righe.
+      // Restano pero' nell'insieme "codici attivi" usato piu' in basso da
+      // chiudiPraticheNonPiuAttiveSuVamart (sono comunque commissioni vere,
+      // presenti su Vamart: la loro assenza da un futuro CSV non deve
+      // risultare in una chiusura automatica per "commissione sparita").
+      if (BRAND_CODICE === "CINQUEGRANA" && venditoreEscluso(riga.venditore)) {
+        escluse++;
+        continue;
+      }
 
       // Gia' tracciata (da un import precedente, con questo stesso numero)?
       const { data: praticaEsistente } = await supabase
@@ -564,7 +593,8 @@ async function main() {
 
   console.log(
     `Import completata. Pratiche nuove: ${nuove}, ricollegate a segnalazioni via mail: ${ricollegate}, ` +
-    `riclassificate da 'consegna' ad 'assistenza': ${riclassificate}, gia' presenti: ${giaPresenti}, errori: ${errori}, ` +
+    `riclassificate da 'consegna' ad 'assistenza': ${riclassificate}, gia' presenti: ${giaPresenti}, ` +
+    `escluse (store di Roma): ${escluse}, errori: ${errori}, ` +
     `chiuse automaticamente (non piu' attive su Vamart): ${risultatoChiusura.chiuse}` +
     (risultatoChiusura.bloccato ? " [BLOCCATA PER SICUREZZA, vedi importazioni_csv_errori]" : "")
   );

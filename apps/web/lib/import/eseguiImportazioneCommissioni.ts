@@ -13,6 +13,15 @@ import { leggiCsvCommissioniDaTesto, parseDataItaliana, type RigaCommissioneGrez
 // Stessa finestra di tolleranza del CLI: vedi importCommissioniAssistenza.mjs.
 const FINESTRA_GIORNI_MATCH = 20;
 
+// Store di Roma: vedi commento su VENDITORI_ESCLUSI_CINQUEGRANA in
+// importCommissioniAssistenza.mjs (CLI), tenuto allineato a mano qui.
+const VENDITORI_ESCLUSI_CINQUEGRANA = ["martina facchini", "iebba noemi"];
+
+function venditoreEscluso(venditore: string | null | undefined): boolean {
+  if (!venditore) return false;
+  return VENDITORI_ESCLUSI_CINQUEGRANA.includes(String(venditore).trim().toLowerCase());
+}
+
 export type RisultatoImportazioneCommissioni = {
   importazioneId: string;
   righeTotali: number;
@@ -20,6 +29,7 @@ export type RisultatoImportazioneCommissioni = {
   ricollegate: number;
   riclassificate: number;
   giaPresenti: number;
+  escluse: number;
   errori: number;
   stato: "completata" | "completata_con_errori";
 };
@@ -170,6 +180,7 @@ export async function eseguiImportazioneCommissioniCsv(
   let ricollegate = 0;
   let riclassificate = 0;
   let giaPresenti = 0;
+  let escluse = 0;
   let errori = 0;
 
   for (const riga of righe) {
@@ -178,6 +189,13 @@ export async function eseguiImportazioneCommissioniCsv(
         throw new Error("Riga senza 'Id commissione', scartata");
       }
       const codiceCommissione = riga.idCommissione.trim();
+
+      // Store di Roma: non creiamo/aggiorniamo nessuna pratica per queste
+      // righe (vedi commento su VENDITORI_ESCLUSI_CINQUEGRANA piu' sopra).
+      if (brandCodice === "CINQUEGRANA" && venditoreEscluso(riga.venditore)) {
+        escluse++;
+        continue;
+      }
 
       const { data: praticaEsistente } = await supabase
         .from("pratiche")
@@ -366,6 +384,7 @@ export async function eseguiImportazioneCommissioniCsv(
     ricollegate,
     riclassificate,
     giaPresenti,
+    escluse,
     errori,
     stato: statoFinale,
   };
