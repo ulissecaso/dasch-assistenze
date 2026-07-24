@@ -243,11 +243,26 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
     };
   });
 
-  const alertRows = [...righeSla, ...righeAvvisoParziale].sort((a, b) => {
+  const alertRowsConDuplicati = [...righeSla, ...righeAvvisoParziale].sort((a, b) => {
     const rangoA = RANGO_LIVELLO[a.livello];
     const rangoB = RANGO_LIVELLO[b.livello];
     if (rangoA !== rangoB) return rangoA - rangoB;
     return `${a.scadenzaData} ${a.scadenzaOra}`.localeCompare(`${b.scadenzaData} ${b.scadenzaOra}`);
+  });
+
+  // Stessa correzione applicata in caricaDatiDirezione.ts (Monitor
+  // Assistenza): una pratica puo' comparire piu' volte in alertRowsConDuplicati
+  // (es. sia "pianificazione_consegna" sia "pagamento" in ritardo insieme, o
+  // una riga SLA vera piu' l'avviso "merce parziale" per la stessa pratica).
+  // Teniamo una sola riga per pratica, la piu' urgente (l'array e' gia'
+  // ordinato per livello e poi data/ora, quindi il primo incontro va bene).
+  // Le statistiche/card operatore (righeConLivelloConteggio/righeAvvisoParziale
+  // sopra) restano invece SENZA questo filtro.
+  const idPraticheGiaMostrate = new Set<string>();
+  const alertRows = alertRowsConDuplicati.filter((r) => {
+    if (idPraticheGiaMostrate.has(r.praticaId)) return false;
+    idPraticheGiaMostrate.add(r.praticaId);
+    return true;
   });
 
   // Elenco operatori del modulo Consegne (deduplicato), dalle regole di

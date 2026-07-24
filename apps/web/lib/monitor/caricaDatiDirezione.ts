@@ -193,7 +193,26 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     if (rangoA !== rangoB) return rangoA - rangoB;
     return a.data_prevista.localeCompare(b.data_prevista);
   });
-  const alertRows: AlertRigaMonitor[] = righeOrdinate.map((r: any) => {
+  // Una pratica puo' avere piu' fasi scadute contemporaneamente: la
+  // data_prevista di OGNI fase viene calcolata gia' alla creazione della
+  // pratica (vedi trg_fn_inizializza_fasi_pratica in 0002_automazioni.sql),
+  // quindi se la pratica resta ferma senza avanzare le fasi successive
+  // "scadono" una dopo l'altra pur restando 'da_iniziare'. Senza questo
+  // filtro la tabella mostrava una riga per ogni fase scaduta della stessa
+  // pratica (es. piu' righe con lo stesso codice_commissione "1040/26").
+  // Qui teniamo solo la fase piu' urgente per pratica: righeOrdinate e'
+  // gia' ordinata per livello e poi per data_prevista, quindi il primo
+  // incontro di ogni pratica_id e' gia' quello giusto da mostrare.
+  // Le statistiche/card operatore (righeConLivelloConteggio, piu' sopra)
+  // restano invece SENZA questo filtro: devono continuare a contare ogni
+  // singola fase in ritardo, non solo una per pratica.
+  const idPraticheGiaMostrate = new Set<string>();
+  const righeUnaPerPratica = righeOrdinate.filter((r: any) => {
+    if (idPraticheGiaMostrate.has(r.pratiche.id)) return false;
+    idPraticheGiaMostrate.add(r.pratiche.id);
+    return true;
+  });
+  const alertRows: AlertRigaMonitor[] = righeUnaPerPratica.map((r: any) => {
     const p = r.pratiche;
     const fw = r.fasi_workflow;
     const { data, ora } = formattaScadenza(r.data_prevista);
