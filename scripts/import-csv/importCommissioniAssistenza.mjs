@@ -375,8 +375,29 @@ async function main() {
       // chiudiPraticheNonPiuAttiveSuVamart (sono comunque commissioni vere,
       // presenti su Vamart: la loro assenza da un futuro CSV non deve
       // risultare in una chiusura automatica per "commissione sparita").
+      //
+      // Registriamo anche il codice in commissioni_escluse (migrazione
+      // 0019): questo importatore e' l'UNICO che legge la colonna
+      // Venditore, ma la stessa commissione compare anche nel CSV "Piano di
+      // Carico" (senza quella colonna, vedi importVamartCsv.mjs), che senza
+      // questa tabella la scambierebbe per una vendita normale e le
+      // creerebbe una pratica di tipo 'consegna'. Il trigger DB su
+      // commissioni_escluse annulla automaticamente qualunque pratica
+      // creata in seguito per questo codice, da qualunque importatore.
       if (BRAND_CODICE === "CINQUEGRANA" && venditoreEscluso(riga.venditore)) {
         escluse++;
+        const { error: erroreBlacklist } = await supabase.from("commissioni_escluse").upsert(
+          { brand_id: brandId, codice_commissione: codiceCommissione, motivo: `Venditore escluso: ${riga.venditore}` },
+          { onConflict: "brand_id,codice_commissione" }
+        );
+        if (erroreBlacklist) {
+          await supabase.from("importazioni_csv_errori").insert({
+            importazione_id: importazione.id,
+            numero_riga: riga._numeroRiga,
+            messaggio_errore: `Commissione ${codiceCommissione} esclusa (venditore ${riga.venditore}) ma inserimento in commissioni_escluse fallito: ${erroreBlacklist.message}`,
+            dato_grezzo: riga._grezzo,
+          });
+        }
         continue;
       }
 

@@ -192,8 +192,27 @@ export async function eseguiImportazioneCommissioniCsv(
 
       // Store di Roma: non creiamo/aggiorniamo nessuna pratica per queste
       // righe (vedi commento su VENDITORI_ESCLUSI_CINQUEGRANA piu' sopra).
+      // Registriamo anche il codice in commissioni_escluse (migrazione
+      // 0019): il CSV "Piano di Carico" non ha la colonna Venditore, quindi
+      // senza questa tabella importVamartCsv.mjs/eseguiImportazione.ts
+      // scambierebbe la stessa commissione per una vendita normale e le
+      // creerebbe comunque una pratica di tipo 'consegna'. Il trigger DB
+      // annulla automaticamente qualunque pratica creata in seguito per
+      // questo codice, da qualunque importatore.
       if (brandCodice === "CINQUEGRANA" && venditoreEscluso(riga.venditore)) {
         escluse++;
+        const { error: erroreBlacklist } = await supabase.from("commissioni_escluse").upsert(
+          { brand_id: brandId, codice_commissione: codiceCommissione, motivo: `Venditore escluso: ${riga.venditore}` },
+          { onConflict: "brand_id,codice_commissione" }
+        );
+        if (erroreBlacklist) {
+          await supabase.from("importazioni_csv_errori").insert({
+            importazione_id: importazione.id,
+            numero_riga: riga._numeroRiga,
+            messaggio_errore: `Commissione ${codiceCommissione} esclusa (venditore ${riga.venditore}) ma inserimento in commissioni_escluse fallito: ${erroreBlacklist.message}`,
+            dato_grezzo: riga._grezzo,
+          });
+        }
         continue;
       }
 

@@ -51,6 +51,16 @@ export default async function DashboardOperatorePage() {
       .in("stato", ["da_iniziare", "in_corso"])
       .lt("data_prevista", adesso)
       .eq("pratiche.operatore_assegnato_id", user.id)
+      // Aggiunto il 25/07/2026 insieme al filtro equivalente in
+      // caricaDatiDirezione.ts/caricaDatiConsegne.ts: senza questo, il
+      // limite sotto (anche se giа alto) resta comunque esposto allo stesso
+      // problema che aveva causato l'aumento da 500 a 5000 spiegato nel
+      // commento qui sotto - un arretrato di fasi di pratiche gia' chiuse/
+      // annullate, mai ripulite, puo' occupare parte del limite prima delle
+      // pratiche davvero aperte. Filtrare qui invece che solo in JS (vedi
+      // conLivello piu' sotto) rende il limite un vero tetto di sicurezza
+      // invece che un taglio arbitrario sulle pratiche giuste.
+      .not("pratiche.stato_generale", "in", '("chiusa","annullata")')
       .order("data_prevista", { ascending: true })
       // Era limit(500): con operatori che hanno molte pratiche vecchie
       // (es. arretrato Cinquegrana), l'ordine "più scaduta prima" tagliava

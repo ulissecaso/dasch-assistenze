@@ -74,6 +74,22 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
     // Conteggio (per le card operatore e le statistiche): fasi consegna
     // "in_corso", senza limite di righe (vedi stesso motivo spiegato in
     // caricaDatiDirezione.ts per la versione assistenza).
+    //
+    // BUG CORRETTO IL 25/07/2026: manca(va) qui il filtro
+    // "pratiche.stato_generale non chiusa/annullata" a livello SQL - veniva
+    // applicato solo dopo, in JS, da conLivello() piu' sotto. Per la
+    // query CONTEGGIO (limit 5000) passava quasi inosservato perche' il
+    // totale di righe reali era sotto quel tetto. Per la query TABELLA
+    // (limit 300, ordinata per data_prevista crescente) invece era un
+    // problema serio: esiste un grande arretrato di fasi 'in_corso' di
+    // pratiche GIA' chiuse, con date_prevista molto vecchie (mai ripulite
+    // quando la pratica e' stata chiusa), che ordinate "piu' vecchia prima"
+    // occupavano TUTTO il limite di 300 prima di arrivare alle pratiche
+    // ancora davvero aperte - la tabella del Monitor Consegne finiva quindi
+    // per mostrare pochissime o nessuna riga anche quando le statistiche
+    // (che usano la query conteggio, non toccata da questo limite)
+    // segnalavano decine di alert reali. Filtrando qui, il limit si applica
+    // gia' al solo insieme corretto.
     conFiltroBrand(
       supabase
         .from("pratica_fasi")
@@ -84,6 +100,7 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
       `)
         .eq("stato", "in_corso")
         .eq("pratiche.tipo", "consegna")
+        .not("pratiche.stato_generale", "in", '("chiusa","annullata")')
         .in("fasi_workflow.codice", FASI_CONSEGNA),
       "pratiche.brand_id"
     ).limit(5000),
@@ -102,6 +119,7 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
       `)
         .eq("stato", "in_corso")
         .eq("pratiche.tipo", "consegna")
+        .not("pratiche.stato_generale", "in", '("chiusa","annullata")')
         .in("fasi_workflow.codice", FASI_CONSEGNA)
         .order("data_prevista", { ascending: true }),
       "pratiche.brand_id"

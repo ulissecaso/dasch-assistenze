@@ -65,13 +65,26 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
       `)
         .in("stato", ["da_iniziare", "in_corso"])
         .lt("data_prevista", adesso)
-        .eq("pratiche.tipo", "assistenza"),
+        .eq("pratiche.tipo", "assistenza")
+        .not("pratiche.stato_generale", "in", '("chiusa","annullata")'),
       "pratiche.brand_id"
     ).limit(5000),
     // Query "tabella": righe da mostrare nel Monitor Assistenze, ordinate
     // dalla più urgente (più vecchia) in su. Questo limite serve solo a
     // contenere il payload della tabella: la vista a parete la taglia
     // ulteriormente a righeMax (11) tramite MonitorBoard.
+    //
+    // BUG CORRETTO IL 25/07/2026: manca(va) qui (e nella query conteggio
+    // sopra) il filtro "pratiche.stato_generale non chiusa/annullata" a
+    // livello SQL - veniva applicato solo dopo, in JS, da conLivello() piu'
+    // sotto. Con limit(300) + ordinamento per data_prevista crescente, un
+    // grande arretrato di fasi di pratiche GIA' chiuse/annullate (mai
+    // ripulite, con date_prevista molto vecchie) poteva occupare gran parte
+    // del limite prima di arrivare alle pratiche davvero ancora aperte,
+    // riducendo di fatto quante ne comparivano in tabella (scoperto
+    // indagando lo stesso bug, molto piu' grave, sul Monitor Consegne: vedi
+    // caricaDatiConsegne.ts). Filtrando qui, il limit si applica gia' al
+    // solo insieme corretto.
     conFiltroBrand(
       supabase
         .from("pratica_fasi")
@@ -87,6 +100,7 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
         .in("stato", ["da_iniziare", "in_corso"])
         .lt("data_prevista", adesso)
         .eq("pratiche.tipo", "assistenza")
+        .not("pratiche.stato_generale", "in", '("chiusa","annullata")')
         .order("data_prevista", { ascending: true }),
       "pratiche.brand_id"
     ).limit(300),
