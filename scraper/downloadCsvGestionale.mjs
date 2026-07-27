@@ -197,6 +197,37 @@ async function scaricaCsv() {
       await locatorFiltroAssistenza(page).selectOption({ label: "Solo di assistenza" });
       await impostaFiltroNonArchiviate(page);
       await impostaFiltroStoreSeRichiesto(page);
+
+      // BUG SCOPERTO IL 27/07/2026: stesso identico problema gia' risolto
+      // l'11/07/2026 sulla pagina Piano di Carico (vedi commento piu' sotto),
+      // ma mai applicato qui. Anche questa pagina ha di default un filtro
+      // data "Dalla Data Commissione" / "Alla Data Commissione" impostato dal
+      // gestionale su un intervallo ristretto: senza allargarlo, il CSV
+      // "commissioni di assistenza" esclude silenziosamente le commissioni
+      // di assistenza piu' vecchie (es. 311/24 del 20/03/2024, 560/24 del
+      // 11/05/2024 su Cinquegrana). Queste non venivano quindi mai lette da
+      // importCommissioniAssistenza.mjs e restavano classificate 'consegna'
+      // (l'unico tipo che il Piano di Carico sa assegnare), comparendo cosi'
+      // per errore nella Dashboard Consegne invece che in quella Assistenza.
+      // Stesso compromesso di data (01/01/2024) usato per il Piano di Carico.
+      console.log('   Allargo il filtro data "Dalla Data Commissione" al 01/01/2024 (evita di escludere commissioni di assistenza piu\' vecchie)...');
+      const campoDaDataCommissioni = await locatorCampoData(page, "Dalla Data Commissione");
+      const campoADataCommissioni = await locatorCampoData(page, "Alla Data Commissione");
+      if (await campoDaDataCommissioni.count() > 0) {
+        await campoDaDataCommissioni.fill("01/01/2024");
+        const valoreLetto = await campoDaDataCommissioni.inputValue().catch(() => "(non leggibile)");
+        console.log(`   [verifica] "Dalla Data Commissione" ora contiene: "${valoreLetto}"`);
+      } else {
+        console.log('   [attenzione] Campo "Dalla Data Commissione" non trovato su questa pagina: proseguo senza toccarlo.');
+      }
+      if (await campoADataCommissioni.count() > 0) {
+        await campoADataCommissioni.fill("31/12/2099");
+        const valoreLetto = await campoADataCommissioni.inputValue().catch(() => "(non leggibile)");
+        console.log(`   [verifica] "Alla Data Commissione" ora contiene: "${valoreLetto}"`);
+      } else {
+        console.log('   [attenzione] Campo "Alla Data Commissione" non trovato su questa pagina: proseguo senza toccarlo.');
+      }
+
       await page.getByRole("button", { name: "Filtra" }).click();
       await page.waitForLoadState("networkidle");
       await debugScreenshot(page, "commissioni-dopo-filtro");

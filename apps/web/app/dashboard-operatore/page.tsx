@@ -222,19 +222,44 @@ export default async function DashboardOperatorePage() {
   // cima, bassa in fondo): alertRowsFasi era gia' ordinato da solo, ma la
   // semplice concatenazione con alertRowsParzialiConsegna (sempre "media")
   // rompeva l'ordine complessivo, es. mostrando "bassa" sopra "media".
-  const alertRows: AlertRigaMonitor[] = [...alertRowsFasi, ...alertRowsParzialiConsegna].sort((a, b) => {
+  const alertRowsConDuplicati: AlertRigaMonitor[] = [...alertRowsFasi, ...alertRowsParzialiConsegna].sort((a, b) => {
     const rangoA = RANGO_LIVELLO[a.livello as keyof typeof RANGO_LIVELLO];
     const rangoB = RANGO_LIVELLO[b.livello as keyof typeof RANGO_LIVELLO];
     if (rangoA !== rangoB) return rangoA - rangoB;
     return `${a.scadenzaData} ${a.scadenzaOra}`.localeCompare(`${b.scadenzaData} ${b.scadenzaOra}`);
   });
 
+  // BUG CORRETTO IL 27/07/2026: stessa correzione gia' applicata il
+  // 25/07/2026 a caricaDatiDirezione.ts e caricaDatiConsegne.ts, ma rimasta
+  // fuori da questa pagina (la dashboard personale "Le mie pratiche").
+  // Una pratica puo' comparire piu' volte in alertRowsConDuplicati (piu'
+  // fasi scadute insieme, es. sia "presa_in_carico" sia "apertura_pratica",
+  // oppure una riga SLA vera piu' l'avviso "merce parziale" per la stessa
+  // pratica di consegna). Teniamo una sola riga per pratica, la piu'
+  // urgente (l'array e' gia' ordinato per livello e poi data/ora, quindi il
+  // primo incontro va bene). Le statistiche/card operatore sotto restano
+  // invece SENZA questo filtro: devono continuare a contare ogni singola
+  // fase in ritardo, non solo una per pratica (stesso principio delle altre
+  // due dashboard).
+  const idPraticheGiaMostrate = new Set<string>();
+  const alertRows: AlertRigaMonitor[] = alertRowsConDuplicati.filter((r) => {
+    if (idPraticheGiaMostrate.has(r.praticaId)) return false;
+    idPraticheGiaMostrate.add(r.praticaId);
+    return true;
+  });
+
+  // Conteggi "veri" (senza il filtro una-riga-per-pratica sopra), usati per
+  // le statistiche e la card operatore: stesso principio di
+  // righeConLivelloConteggio in caricaDatiDirezione.ts/caricaDatiConsegne.ts.
+  const allertTotaliReale = righeConLivello.length + alertRowsParzialiConsegna.length;
+  const allertUrgentiReale = righeConLivello.filter((r: any) => r.livello === "critica").length;
+
   const operatori: OperatoreCardMonitor[] = [{
     id: user.id,
     nome: opNome,
     colore: opColore,
-    alertAttivi: alertRows.length,
-    urgenti: alertRows.filter((r) => r.livello === "critica").length,
+    alertAttivi: allertTotaliReale,
+    urgenti: allertUrgentiReale,
   }];
 
   const scaduti = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
@@ -255,8 +280,8 @@ export default async function DashboardOperatorePage() {
         operatori={operatori}
         alertRows={alertRows}
         stats={{
-          allertTotali: alertRows.length,
-          allertUrgenti: alertRows.filter((r) => r.livello === "critica").length,
+          allertTotali: allertTotaliReale,
+          allertUrgenti: allertUrgentiReale,
           scaduti,
           inScadenzaOggi,
           risoltiOggi: risoltiOggi ?? 0,
