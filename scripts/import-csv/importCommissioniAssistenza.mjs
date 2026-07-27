@@ -369,6 +369,27 @@ async function main() {
       }
       const codiceCommissione = riga.idCommissione.trim();
 
+      // BUG CORRETTO IL 27/07/2026: un codice commissione vero non contiene
+      // mai spazi/interruzioni di riga ed e' sempre corto (es. "1087/26",
+      // "560/24", "30914", "SV5949976256735446"). Scoperto un caso reale
+      // (commissione 407/25 Cinquegrana) in cui un ritorno a capo nel campo
+      // libero "Descrizione del problema" dell'export Vamart ha fatto
+      // slittare le colonne: il testo del cliente e' finito dentro "Id
+      // commissione" ("407/25 descrizione del problema Ho un problema con
+      // un'anta della cucina..."). La pratica 407/25 era gia' tracciata
+      // correttamente (chiusa da tempo) con il codice pulito, quindi questa
+      // riga sporca aveva creato una SECONDA pratica per lo stesso caso reale
+      // (il controllo di unicita' brand+codice non la intercetta, perche' il
+      // testo sporco e' tecnicamente un codice diverso da quello pulito) -
+      // vista come doppione dagli operatori. Scartiamo qui la riga (finisce
+      // in importazioni_csv_errori per verifica manuale, il resto
+      // dell'importazione prosegue) invece di creare una pratica illeggibile.
+      if (/\s/.test(codiceCommissione) || codiceCommissione.length > 30) {
+        throw new Error(
+          `Codice commissione sospetto, riga scartata (probabile disallineamento colonne nell'export Vamart, es. descrizione del problema finita nel campo Id commissione): "${codiceCommissione.slice(0, 80)}${codiceCommissione.length > 80 ? "…" : ""}"`
+        );
+      }
+
       // Store di Roma (vedi commento su VENDITORI_ESCLUSI_CINQUEGRANA piu'
       // sopra): non creiamo/aggiorniamo nessuna pratica per queste righe.
       // Restano pero' nell'insieme "codici attivi" usato piu' in basso da
