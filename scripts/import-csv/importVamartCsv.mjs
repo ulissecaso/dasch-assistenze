@@ -98,6 +98,33 @@ const STATI_ARRIVATO_O_OLTRE = new Set(["In giacenza", "Parzialmente consegnato"
 // fasi_workflow.sla_ore_default.
 const SLA_ORE_CONFERMA_ORDINE_DI_RIPIEGO = 48;
 
+// FIX 28/07/2026 (segnalato dagli operatori: diverse pratiche di
+// assistenza compaiono come "critica" a tempo indefinito con annotazione
+// manuale "commissione vuota, cancellare"). Causa: sincronizzaFasiAssistenza
+// esce subito se la pratica non ha nessuna riga/articolo (righe.length===0,
+// vedi piu' sotto), quindi le sue fasi restano bloccate per sempre in
+// qualunque stato si trovassero -- e continuano a generare alert SLA senza
+// che nessuna azione automatica possa mai risolverle, perche' non arrivera'
+// mai una riga di Piano di Carico per una commissione che di fatto non ha
+// (o non ha piu') articoli associati su Vamart.
+//
+// Una pratica appena creata puo' legittimamente non avere ancora righe (il
+// prossimo giro di importazione le portera'): la soglia sotto distingue
+// questo caso normale da una commissione genuinamente vuota/invalida,
+// dando tempo a un paio di cicli di importazione (1-2 al giorno) prima di
+// considerarla anomala.
+const GIORNI_PRATICA_VUOTA_SOSPETTA = 15;
+
+// Stesso principio di sicurezza di SOGLIA_MINIMA_CANDIDATE/QUOTA_MASSIMA_CHIUSURA
+// in importCommissioniAssistenza.mjs: se troppe pratiche risultassero vuote
+// in un colpo solo, e' piu' probabile un problema a monte (es. Piano di
+// Carico che non importa piu' correttamente le righe per un intero brand)
+// che una vera ondata di commissioni invalide. Meglio bloccarsi e segnalare
+// piuttosto che annullare in massa pratiche che magari hanno solo le righe
+// non ancora arrivate per un motivo diverso dal previsto.
+const SOGLIA_MINIMA_CANDIDATE_VUOTE = 10;
+const QUOTA_MASSIMA_ANNULLAMENTO_VUOTE = 0.3; // 30%
+
 const DIMENSIONE_BLOCCO = 300;
 const CONCORRENZA_PRATICHE = 20;
 
@@ -143,6 +170,77 @@ magazzino: riga.magazzino,
 ubicazione: riga.ubicazione,
 riga_hash: riga.riga_hash,
 };
+}
+
+// Annulla le pratiche di assistenza aperte da piu' di GIORNI_PRATICA_VUOTA_SOSPETTA
+// giorni che non hanno MAI ricevuto nessuna riga/articolo dal Piano di
+// Carico: vedi commento sulla costante piu' sopra per il contesto completo.
+// Chiamata una volta per brand, indipendentemente da quali codici compaiono
+// nel CSV di questo giro (a differenza di chiudiPraticheNonPiuAttiveSuVamart
+// in importCommissioniAssistenza.mjs, che confronta con i codici presenti
+// nel CSV: qui il criterio e' "nessuna riga mai arrivata", non "sparita da
+// un CSV che prima la conteneva").
+async function annullaPraticheVuoteDaTroppoTempo(supabase, brandId) {
+const sogliaData = new Date(Date.now() - GIORNI_PRATICA_VUOTA_SOSPETTA * 24 * 3_600_000).toISOString();
+
+const { data: candidate, error } = await supabase
+.from("pratiche")
+.select("id, codice_commissione, data_apertura, descrizione")
+.eq("brand_id", brandId)
+.eq("tipo", "assistenza")
+.not("stato_generale", "in", "(chiusa,annullata)")
+.lt("data_apertura", sogliaData);
+if (error) throw error;
+if (!candidate || candidate.length === 0) return { annullate: 0, bloccato: false };
+
+const idCandidate = candidate.map((p) => p.id);
+const mappaConteggioRighe = new Map();
+await Promise.all(
+inBlocchi(idCandidate).map(async (blocco) => {
+const { data, error: erroreRighe } = await supabase.from("pratica_righe").select("pratica_id").in("pratica_id", blocco);
+if (erroreRighe) throw erroreRighe;
+for (const r of data ?? []) mappaConteggioRighe.set(r.pratica_id, (mappaConteggioRighe.get(r.pratica_id) ?? 0) + 1);
+})
+);
+
+const vuote = candidate.filter((p) => !mappaConteggioRighe.has(p.id));
+if (vuote.length === 0) return { annullate: 0, bloccato: false };
+
+if (
+candidate.length >= SOGLIA_MINIMA_CANDIDATE_VUOTE &&
+vuote.length > candidate.length * QUOTA_MASSIMA_ANNULLAMENTO_VUOTE
+) {
+console.error(
+`ATTENZIONE: annullamento automatico "pratiche vuote" bloccato per sicurezza. ${vuote.length} pratiche su ${candidate.length} ` +
+`(> ${QUOTA_MASSIMA_ANNULLAMENTO_VUOTE * 100}%) risultano senza nessuna riga da oltre ${GIORNI_PRATICA_VUOTA_SOSPETTA} giorni: ` +
+`probabile problema a monte nell'importazione del Piano di Carico, non una vera ondata di commissioni vuote. Nessuna pratica e' stata toccata.`
+);
+return { annullate: 0, bloccato: true, candidateTotali: candidate.length, wouldBeAnnullate: vuote.length };
+}
+
+const adesso = new Date().toISOString();
+for (const p of vuote) {
+const nota = `Annullata automaticamente: nessun articolo/riga associato dal Piano di Carico da oltre ${GIORNI_PRATICA_VUOTA_SOSPETTA} giorni dall'apertura (${new Date().toLocaleString("it-IT")}). Probabile commissione vuota/invalida su Vamart.`;
+await supabase
+.from("pratiche")
+.update({
+stato_generale: "annullata",
+data_chiusura_effettiva: adesso,
+descrizione: p.descrizione ? `${p.descrizione}\n\n${nota}` : nota,
+})
+.eq("id", p.id);
+
+await supabase.from("storico_modifiche").insert({
+entita: "pratiche",
+entita_id: p.id,
+campo: "stato_generale",
+valore_precedente: null,
+valore_nuovo: "annullata (esclusa automaticamente: nessuna riga da Piano di Carico)",
+origine: "automazione",
+});
+}
+
+return { annullate: vuote.length, bloccato: false, candidateTotali: candidate.length };
 }
 
 async function main() {
@@ -453,6 +551,23 @@ await Promise.all(
 inBlocchi(erroriDaRegistrare, 500).map((blocco) => (blocco.length > 0 ? supabase.from("importazioni_csv_errori").insert(blocco) : Promise.resolve()))
 );
 
+// ------------------------------------------------------------------
+// FASE 4: pulizia pratiche di assistenza "vuote" (vedi
+// annullaPraticheVuoteDaTroppoTempo piu' sopra per il contesto).
+// ------------------------------------------------------------------
+const risultatoPraticheVuote = await annullaPraticheVuoteDaTroppoTempo(supabase, brandId);
+if (risultatoPraticheVuote.bloccato) {
+await supabase.from("importazioni_csv_errori").insert({
+importazione_id: importazione.id,
+numero_riga: 0,
+messaggio_errore:
+`Annullamento automatico "pratiche vuote" bloccato per sicurezza: ${risultatoPraticheVuote.wouldBeAnnullate} pratiche su ` +
+`${risultatoPraticheVuote.candidateTotali} risultano senza righe da oltre ${GIORNI_PRATICA_VUOTA_SOSPETTA} giorni ` +
+`(> ${QUOTA_MASSIMA_ANNULLAMENTO_VUOTE * 100}%). Probabile problema a monte nell'importazione: verificare manualmente prima di procedere.`,
+dato_grezzo: null,
+});
+}
+
 const totaleErrori = righeErrore + erroriParsing.length;
 await supabase
 .from("importazioni_csv")
@@ -467,7 +582,9 @@ completata_il: new Date().toISOString(),
 .eq("id", importazione.id);
 
 console.log(
-`Import completata. Assistenza: ${aggiornate} aggiornate, ${invariate} invariate. Consegne: ${nuoveConsegne} nuove pratiche create. Errori: ${totaleErrori}`
+`Import completata. Assistenza: ${aggiornate} aggiornate, ${invariate} invariate. Consegne: ${nuoveConsegne} nuove pratiche create. ` +
+`Pratiche vuote annullate: ${risultatoPraticheVuote.annullate}${risultatoPraticheVuote.bloccato ? " [BLOCCATO PER SICUREZZA, vedi importazioni_csv_errori]" : ""}. ` +
+`Errori: ${totaleErrori}`
 );
 }
 
