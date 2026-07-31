@@ -102,8 +102,27 @@ export default async function DashboardOperatorePage() {
 
   const regolePerFase = costruisciMappaRegole(regoleAttive);
 
+  // CORRETTO IL 31/07/2026: per le pratiche di CONSEGNA, "pianificazione_
+  // consegna"/"pagamento" diventano un vero alert solo quando passano a
+  // stato "in_corso" (cioe' quando la merce e' arrivata al 100% - vedi
+  // sincronizzaFasiConsegna in importVamartCsv.mjs e lo stesso identico
+  // filtro in caricaDatiConsegne.ts, .eq("stato","in_corso")). Finche' sono
+  // ancora "da_iniziare" NON sono davvero in ritardo azionabile: si e' solo
+  // in attesa che il fornitore consegni la merce in deposito, non serve
+  // ancora fare nulla sulla pratica. Qui invece la query sopra prende TUTTE
+  // le fasi scadute sia "da_iniziare" sia "in_corso" (giusto per le fasi di
+  // ASSISTENZA, dove "da_iniziare" e scaduta e' gia' un alert vero, es.
+  // "Presa in carico"): senza distinguere per tipo, un operatore con molte
+  // pratiche di consegna ancora in attesa di merce vedeva qui un numero
+  // enorme (43) che non trovava corrispondenza nel Monitor Consegne
+  // dell'ufficio (8), che applica correttamente questa distinzione.
   const righeConLivello = (faseRitardo ?? [])
-    .filter((r: any) => r.pratiche && !["chiusa", "annullata"].includes(r.pratiche.stato_generale) && !praticaEspositivaDaEscludere(r.pratiche))
+    .filter((r: any) =>
+      r.pratiche &&
+      !["chiusa", "annullata"].includes(r.pratiche.stato_generale) &&
+      !praticaEspositivaDaEscludere(r.pratiche) &&
+      !(r.pratiche.tipo === "consegna" && r.stato !== "in_corso")
+    )
     .map((r: any) => {
       const oreRitardo = (adessoMs - new Date(r.data_prevista).getTime()) / 3_600_000;
       return { ...r, livello: calcolaLivelloDaRitardo(regolePerFase, r.fase_id, oreRitardo) };
