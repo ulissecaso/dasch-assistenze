@@ -180,7 +180,43 @@ export default function MonitorBoard({
 
   const righePerLivello = soloUrgenti ? alertRows.filter((r) => r.livello === "critica") : alertRows;
   const righePerBrand = filtroBrand ? righePerLivello.filter((r) => r.brand?.codice === filtroBrand) : righePerLivello;
-  const righeVisibili = (filtroTipo ? righePerBrand.filter((r) => r.tipo === filtroTipo) : righePerBrand).slice(0, righeMax);
+  const righeFiltrate = filtroTipo ? righePerBrand.filter((r) => r.tipo === filtroTipo) : righePerBrand;
+  const righeVisibili = righeFiltrate.slice(0, righeMax);
+
+  // CORRETTO IL 31/07/2026: quando l'utente sceglie un filtro (brand, tipo o
+  // "solo urgenti"), la tabella sotto si aggiornava ma i numeri in alto (le
+  // card per operatore e "ALLERT TOTALI/URGENTI") restavano SEMPRE quelli
+  // calcolati lato server sul totale non filtrato - es. un operatore filtrava
+  // "Solo Consegne" su un brand, vedeva 17 righe in tabella ma la sua card
+  // continuava a dire 145: numeri diversi per la stessa persona, motivo delle
+  // lamentele. Con nessun filtro attivo continuiamo a fidarci dei valori
+  // arrivati da server (calcolati sul set SENZA LIMITE di 300/5000 righe, per
+  // restare esatti anche oltre quel tetto - vedi caricaDatiDirezione.ts /
+  // caricaDatiConsegne.ts); quando pero' e' attivo un filtro ricalcoliamo qui
+  // "ALLERT ATTIVI" e "URGENTI" (per operatore e nel totale) sulle righe
+  // effettivamente filtrate, cosi' i numeri in alto raccontano sempre la
+  // stessa storia della tabella sotto. Gli altri quattro riquadri (SCADUTI,
+  // IN SCADENZA OGGI, RISOLTI OGGI, PRATICHE TOTALI) restano invece i valori
+  // globali da server: sono indicatori di salute generale, non legati al
+  // filtro di vista corrente.
+  const filtroAttivo = filtroBrand !== null || filtroTipo !== null || soloUrgenti;
+  const operatoriMostrati: OperatoreCardMonitor[] = filtroAttivo
+    ? operatori.map((op) => {
+        const righeOp = righeFiltrate.filter((r) => r.operatoreNome === op.nome);
+        return {
+          ...op,
+          alertAttivi: righeOp.length,
+          urgenti: righeOp.filter((r) => r.livello === "critica").length,
+        };
+      })
+    : operatori;
+  const statsMostrate: StatsMonitor = filtroAttivo
+    ? {
+        ...stats,
+        allertTotali: righeFiltrate.length,
+        allertUrgenti: righeFiltrate.filter((r) => r.livello === "critica").length,
+      }
+    : stats;
 
   return (
     <div ref={boardRef} className="mon-wrap">
@@ -250,7 +286,7 @@ export default function MonitorBoard({
 
         <div className="mon-header">
           <div className="op-row">
-            {operatori.map((op) => (
+            {operatoriMostrati.map((op) => (
               <div key={op.id} className="op-card" style={{ borderColor: op.colore }}>
                 <div className="op-card-top">
                   <div className="op-avatar" style={{ background: op.colore }}>
@@ -339,7 +375,7 @@ export default function MonitorBoard({
         </div>
 
         <div className="mon-stats">
-          <div className="mon-stat"><div className="lbl" style={{ color: "#f87171" }}><Icona nome="bell" className="ic ic-bell" /> ALLERT TOTALI</div><div className="val">{stats.allertTotali} <small>di cui {stats.allertUrgenti} urgenti</small></div></div>
+          <div className="mon-stat"><div className="lbl" style={{ color: "#f87171" }}><Icona nome="bell" className="ic ic-bell" /> ALLERT TOTALI</div><div className="val">{statsMostrate.allertTotali} <small>di cui {statsMostrate.allertUrgenti} urgenti</small></div></div>
           <div className="mon-stat"><div className="lbl" style={{ color: "#fb923c" }}><Icona nome="clock" className="ic" /> SCADUTI</div><div className="val">{stats.scaduti} <small>da gestire</small></div></div>
           <div className="mon-stat"><div className="lbl" style={{ color: "#facc15" }}><Icona nome="alert-circle" className="ic" /> IN SCADENZA OGGI</div><div className="val">{stats.inScadenzaOggi}</div></div>
           <div className="mon-stat"><div className="lbl" style={{ color: "#60a5fa" }}><Icona nome="check-circle" className="ic" /> RISOLTI OGGI</div><div className="val">{stats.risoltiOggi}</div></div>
