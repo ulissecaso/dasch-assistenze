@@ -182,6 +182,23 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
   // Usata solo per le righe mostrate nella tabella del monitor.
   const righeConLivelloTabella = conLivello(faseRitardoTabella);
 
+  // CORRETTO IL 31/07/2026: righeConLivelloConteggio puo' contare la stessa
+  // pratica piu' volte (es. sia "presa_in_carico" sia "apertura_pratica" in
+  // ritardo insieme), quindi il totale mostrato nelle card/statistiche non
+  // corrispondeva al numero di pratiche realmente in ritardo che si vedono
+  // scorrendo la tabella (stesso problema gia' risolto in
+  // dashboard-operatore/page.tsx il 29/07/2026). Qui deduplichiamo lo stesso
+  // principio (una riga sola per pratica) ma partendo dal set SENZA LIMITE
+  // (righeConLivelloConteggio, non righeConLivelloTabella che ha invece il
+  // limite di 300 righe): cosi' il conteggio resta esatto anche quando le
+  // pratiche in ritardo superano quel limite.
+  const idPraticheContiate = new Set<string>();
+  const righeUnaPerPraticaConteggio = righeConLivelloConteggio.filter((r: any) => {
+    if (idPraticheContiate.has(r.pratiche.id)) return false;
+    idPraticheContiate.add(r.pratiche.id);
+    return true;
+  });
+
   // Percentuale di merce arrivata in deposito, solo per le pratiche che
   // compaiono in tabella con la fase "arrivo_merce" ancora aperta: serve
   // per mostrare "Merce parzialmente pronta in deposito (NN%)" invece del
@@ -217,9 +234,10 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
   // Qui teniamo solo la fase piu' urgente per pratica: righeOrdinate e'
   // gia' ordinata per livello e poi per data_prevista, quindi il primo
   // incontro di ogni pratica_id e' gia' quello giusto da mostrare.
-  // Le statistiche/card operatore (righeConLivelloConteggio, piu' sopra)
-  // restano invece SENZA questo filtro: devono continuare a contare ogni
-  // singola fase in ritardo, non solo una per pratica.
+  // Le statistiche/card operatore usano righeUnaPerPraticaConteggio (vedi
+  // correzione del 31/07/2026 piu' sopra): stesso principio di dedup per
+  // pratica, ma applicato al set senza limite, non a questo qui sotto che
+  // e' invece troncato a 300 righe per la sola tabella.
   const idPraticheGiaMostrate = new Set<string>();
   const righeUnaPerPratica = righeOrdinate.filter((r: any) => {
     if (idPraticheGiaMostrate.has(r.pratiche.id)) return false;
@@ -261,12 +279,13 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     ).values()
   ) as { id: string; nome: string; cognome: string; colore_badge: string | null }[];
 
-  // Le card per operatore e le statistiche usano SEMPRE il set completo
-  // (righeConLivelloConteggio), mai quello troncato della tabella.
+  // Le card per operatore e le statistiche usano SEMPRE il set completo e
+  // deduplicato per pratica (righeUnaPerPraticaConteggio), mai quello
+  // troncato della tabella e mai il conteggio grezzo con fasi ripetute.
   const operatori: OperatoreCardMonitor[] = operatoriAssistenza
     .sort((a, b) => a.nome.localeCompare(b.nome))
     .map((op: any) => {
-    const righeOp = righeConLivelloConteggio.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
+    const righeOp = righeUnaPerPraticaConteggio.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
     return {
       id: op.id,
       nome: `${op.nome} ${op.cognome}`,
@@ -276,8 +295,8 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     };
   });
 
-  const scaduti = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
-  const inScadenzaOggi = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
+  const scaduti = righeUnaPerPraticaConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
+  const inScadenzaOggi = righeUnaPerPraticaConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
   // Avvisi su problemi di alimentazione dati (import CSV Vamart o email di
   // segnalazione): vedi lib/monitor/caricaAvvisiImportazione.ts.
@@ -287,8 +306,8 @@ export async function caricaDatiDirezione(supabase: any, opzioni: OpzioniFiltroB
     alertRows,
     operatori,
     stats: {
-      allertTotali: righeConLivelloConteggio.length,
-      allertUrgenti: righeConLivelloConteggio.filter((r) => r.livello === "critica").length,
+      allertTotali: righeUnaPerPraticaConteggio.length,
+      allertUrgenti: righeUnaPerPraticaConteggio.filter((r: any) => r.livello === "critica").length,
       scaduti,
       inScadenzaOggi,
       risoltiOggi: risoltiOggi ?? 0,

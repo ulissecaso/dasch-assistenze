@@ -184,6 +184,20 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
   const righeConLivelloConteggio = conLivello(faseConteggio);
   const righeConLivelloTabella = conLivello(faseTabella);
 
+  // CORRETTO IL 31/07/2026 (stessa correzione applicata in
+  // caricaDatiDirezione.ts): una pratica con sia "pianificazione_consegna"
+  // sia "pagamento" in ritardo insieme veniva contata due volte nelle
+  // statistiche/card operatore, senza corrispondenza con le righe viste in
+  // tabella. Deduplichiamo per pratica lo stesso set SENZA LIMITE
+  // (righeConLivelloConteggio, non righeConLivelloTabella che ha il limite
+  // di 300 righe), cosi' il conteggio resta esatto anche oltre quel limite.
+  const idPraticheContiate = new Set<string>();
+  const righeUnaPerPraticaConteggio = righeConLivelloConteggio.filter((r: any) => {
+    if (idPraticheContiate.has(r.pratiche.id)) return false;
+    idPraticheContiate.add(r.pratiche.id);
+    return true;
+  });
+
   // Pratiche gia' in "pianificazione_consegna: in_corso" (100% arrivato):
   // per queste l'avviso parziale non serve piu', c'e' gia' la riga vera.
   const idGiaInCorso = new Set(
@@ -274,8 +288,9 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
   // una riga SLA vera piu' l'avviso "merce parziale" per la stessa pratica).
   // Teniamo una sola riga per pratica, la piu' urgente (l'array e' gia'
   // ordinato per livello e poi data/ora, quindi il primo incontro va bene).
-  // Le statistiche/card operatore (righeConLivelloConteggio/righeAvvisoParziale
-  // sopra) restano invece SENZA questo filtro.
+  // Le statistiche/card operatore usano righeUnaPerPraticaConteggio (vedi
+  // correzione del 31/07/2026 piu' sopra) e righeAvvisoParziale (che e' gia'
+  // una riga per pratica di natura sua, quindi non necessita di dedup).
   const idPraticheGiaMostrate = new Set<string>();
   const alertRows = alertRowsConDuplicati.filter((r) => {
     if (idPraticheGiaMostrate.has(r.praticaId)) return false;
@@ -296,7 +311,7 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
   const operatori: OperatoreCardMonitor[] = operatoriConsegna
     .sort((a, b) => a.nome.localeCompare(b.nome))
     .map((op) => {
-      const alertSla = righeConLivelloConteggio.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
+      const alertSla = righeUnaPerPraticaConteggio.filter((r: any) => r.pratiche.operatore_assegnato_id === op.id);
       const alertParziali = righeAvvisoParziale.filter((r) => mappaOperatorePerPratica.get(r.praticaId) === op.id);
       return {
         id: op.id,
@@ -310,8 +325,8 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
   // "Scaduti" e "in scadenza oggi" restano legati alle sole soglie SLA vere e
   // proprie (pianificazione_consegna/pagamento in_corso): l'avviso di merce
   // parziale non ha una vera scadenza SLA, e' solo un suggerimento operativo.
-  const scaduti = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
-  const inScadenzaOggi = righeConLivelloConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
+  const scaduti = righeUnaPerPraticaConteggio.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
+  const inScadenzaOggi = righeUnaPerPraticaConteggio.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
 
   // Avvisi su problemi di alimentazione dati (import CSV Vamart o email di
   // segnalazione): uguali per Assistenza e Consegne, e' la stessa fonte dati
@@ -322,8 +337,8 @@ export async function caricaDatiConsegne(supabase: any, opzioni: OpzioniFiltroBr
     alertRows,
     operatori,
     stats: {
-      allertTotali: righeConLivelloConteggio.length + righeAvvisoParziale.length,
-      allertUrgenti: righeConLivelloConteggio.filter((r: any) => r.livello === "critica").length,
+      allertTotali: righeUnaPerPraticaConteggio.length + righeAvvisoParziale.length,
+      allertUrgenti: righeUnaPerPraticaConteggio.filter((r: any) => r.livello === "critica").length,
       scaduti,
       inScadenzaOggi,
       risoltiOggi: risoltiOggi ?? 0,

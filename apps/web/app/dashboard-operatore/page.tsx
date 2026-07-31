@@ -248,11 +248,16 @@ export default async function DashboardOperatorePage() {
     return true;
   });
 
-  // Conteggi "veri" (senza il filtro una-riga-per-pratica sopra), usati per
-  // le statistiche e la card operatore: stesso principio di
-  // righeConLivelloConteggio in caricaDatiDirezione.ts/caricaDatiConsegne.ts.
-  const allertTotaliReale = righeConLivello.length + alertRowsParzialiConsegna.length;
-  const allertUrgentiReale = righeConLivello.filter((r: any) => r.livello === "critica").length;
+  // CORRETTO IL 29/07/2026: prima qui si contava ogni singola fase in
+  // ritardo (una pratica con piu' fasi scadute insieme contava piu' volte),
+  // mentre la tabella sopra mostra una riga sola per pratica (alertRows):
+  // l'operatore vedeva un numero enorme senza corrispondenza con le righe
+  // in lista, generando confusione inutile. Ora i conteggi usano le stesse
+  // righe gia' deduplicate della tabella, cosi' il numero in alto e le
+  // righe visibili raccontano sempre la stessa storia. Stessa correzione
+  // applicata anche in caricaDatiDirezione.ts e caricaDatiConsegne.ts.
+  const allertTotaliReale = alertRows.length;
+  const allertUrgentiReale = alertRows.filter((r) => r.livello === "critica").length;
 
   const operatori: OperatoreCardMonitor[] = [{
     id: user.id,
@@ -262,9 +267,8 @@ export default async function DashboardOperatorePage() {
     urgenti: allertUrgentiReale,
   }];
 
-  const scaduti = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) < oggi).length;
-  const inScadenzaOggi = righeConLivello.filter((r: any) => r.data_prevista.slice(0, 10) === oggi).length;
-
+  const scaduti = alertRows.filter((r) => r.scadenzaData.slice(0, 10) < oggi).length;
+  const inScadenzaOggi = alertRows.filter((r) => r.scadenzaData.slice(0, 10) === oggi).length;
   const brandsOperatore = (brandsAttivi ?? [])
     .map((ob: any) => ob.brands)
     .filter(Boolean) as { codice: string; nome: string; colore: string }[];
