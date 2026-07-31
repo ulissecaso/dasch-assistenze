@@ -131,24 +131,31 @@ export default function MonitorBoard({
   const boardRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  // Elenco dei brand da offrire nel filtro: se il chiamante passa la lista
-  // completa dei brand attivi (brandsAttivi) la usiamo sempre, così i
-  // pulsanti compaiono anche quando in questo momento le righe visibili
-  // sono di un solo brand. Altrimenti si deriva dai brand realmente
-  // presenti nelle righe (comportamento precedente) e il filtro compare
-  // solo se ce ne sono almeno due (altrimenti sarebbe un controllo inutile).
-  const brandsDisponibili =
-    brandsAttivi && brandsAttivi.length > 0
-      ? brandsAttivi
-      : Array.from(new Map(alertRows.filter((r) => r.brand).map((r) => [r.brand!.codice, r.brand!])).values());
+  // Elenco dei brand da offrire nel filtro: partiamo dalla lista che passa il
+  // chiamante (brandsAttivi), cosi' i pulsanti compaiono anche quando in
+  // questo momento le righe visibili sono di un solo brand, MA la
+  // completiamo sempre anche con i brand realmente presenti nelle righe
+  // attuali (alertRows).
+  // CORRETTO IL 31/07/2026: prima, se brandsAttivi veniva passato, sostituiva
+  // del tutto la lista derivata dalle righe invece di completarla - se per
+  // qualche motivo (es. abilitazione dell'operatore su un brand scaduta o
+  // mai attivata per un tipo di pratica) un brand/tipo presente per davvero
+  // nelle righe non risultava nella lista "ufficiale", il pulsante per
+  // filtrarlo spariva del tutto e l'operatore non poteva isolare quelle
+  // righe per confrontarle con le altre dashboard (motivo di una lamentela:
+  // mancava il pulsante "Solo Consegne" pur avendo consegne in ritardo).
+  // Ora e' sempre l'unione delle due liste, mai una sostituzione.
+  const brandsDaRighe = new Map(alertRows.filter((r) => r.brand).map((r) => [r.brand!.codice, r.brand!]));
+  const brandsDisponibili = Array.from(
+    new Map([...(brandsAttivi ?? []).map((b) => [b.codice, b] as const), ...brandsDaRighe]).values()
+  );
 
-  // Stessa idea per il filtro tipo (assistenza/consegna): se il chiamante
-  // passa tipiAttivi lo usiamo sempre, altrimenti si deriva da quali tipi
-  // compaiono davvero nelle righe attuali.
-  const tipiDisponibili =
-    tipiAttivi && tipiAttivi.length > 0
-      ? tipiAttivi
-      : Array.from(new Set(alertRows.filter((r) => r.tipo).map((r) => r.tipo!)));
+  // Stessa correzione per il filtro tipo (assistenza/consegna): unione tra
+  // tipiAttivi (passato dal chiamante) e i tipi realmente presenti nelle
+  // righe attuali, mai solo il primo se il secondo ha qualcosa in piu'.
+  const tipiDisponibili = Array.from(
+    new Set([...(tipiAttivi ?? []), ...alertRows.filter((r) => r.tipo).map((r) => r.tipo!)])
+  );
 
   useEffect(() => {
     const mesi = ["GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO", "LUGLIO", "AGOSTO", "SETTEMBRE", "OTTOBRE", "NOVEMBRE", "DICEMBRE"];
@@ -239,6 +246,10 @@ export default function MonitorBoard({
         </div>
 
         {brandsDisponibili.length > 1 && (
+          // NB 31/07/2026: la soglia "> 1" resta corretta anche dopo la
+          // correzione qui sopra: se l'operatore lavora davvero su un solo
+          // brand il pulsante di filtro sarebbe inutile (non cambierebbe
+          // nulla), quindi va bene che resti nascosto in quel caso.
           <div className="mon-brand-row">
             <button
               className={`mon-brand-chip${filtroBrand === null ? " attivo" : ""}`}
