@@ -54,6 +54,33 @@ async function eseguiConConcorrenza<T>(elementi: T[], concorrenza: number, fn: (
   await Promise.all(Array.from({ length: numeroOperai }, operaio));
 }
 
+const DIMENSIONE_PAGINA = 1000;
+
+// BUG CORRETTO IL 06/08/2026 (segnalato da Direttore: migliaia di
+// pratica_righe duplicate, alcune pratiche con oltre 1800 righe invece di
+// poche unita'). Causa: le select "esistenti" sotto (pratica_righe,
+// pratica_fasi) non paginavano mai i risultati. Supabase/PostgREST tronca
+// silenziosamente oltre il limite di default del progetto (tipicamente
+// 1000 righe) senza restituire un errore: quando il totale delle righe di
+// un blocco di pratiche superava quel limite, l'importatore smetteva di
+// "vedere" le righe gia' esistenti per alcune pratiche, le trattava come
+// nuove e le re-inseriva ad ogni giro -- un circolo vizioso che peggiora
+// da solo (piu' duplicati = risposta ancora piu' vicina/oltre al limite al
+// giro successivo). Questa funzione pagina esplicitamente con .range() per
+// non fidarsi mai del limite implicito, qualunque esso sia.
+async function selezionaTutto<T = any>(costruisciQuery: () => any, dimensionePagina = DIMENSIONE_PAGINA): Promise<T[]> {
+  let tutti: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const { data, error } = await costruisciQuery().range(offset, offset + dimensionePagina - 1);
+    if (error) throw error;
+    tutti = tutti.concat((data ?? []) as T[]);
+    if (!data || data.length < dimensionePagina) break;
+    offset += dimensionePagina;
+  }
+  return tutti;
+}
+
 function payloadRigaDa(praticaId: string, riga: any, mappaFornitori: Map<string, string>) {
   const fornitoreId = riga.fornitore ? mappaFornitori.get(riga.fornitore) ?? null : null;
   return {
@@ -154,9 +181,10 @@ export async function eseguiImportazioneCsv(
   const mappaPraticheEsistenti = new Map<string, any>();
   await Promise.all(
     inBlocchi(codiciCommissione).map(async (blocco) => {
-      const { data, error } = await supabase.from("pratiche").select("*").eq("brand_id", brandId).in("codice_commissione", blocco);
-      if (error) throw error;
-      for (const p of data ?? []) mappaPraticheEsistenti.set(p.codice_commissione, p);
+      const praticheTrovate = await selezionaTutto(() =>
+        supabase.from("pratiche").select("*").eq("brand_id", brandId).in("codice_commissione", blocco).order("id", { ascending: true })
+      );
+      for (const p of praticheTrovate) mappaPraticheEsistenti.set(p.codice_commissione, p);
     })
   );
   const idPraticheEsistenti = [...mappaPraticheEsistenti.values()].map((p) => p.id);
@@ -164,12 +192,14 @@ export async function eseguiImportazioneCsv(
   const mappaRigheEsistenti = new Map<string, any>();
   await Promise.all(
     inBlocchi(idPraticheEsistenti).map(async (blocco) => {
-      const { data, error } = await supabase
-        .from("pratica_righe")
-        .select("id, pratica_id, codice_articolo, descrizione, riga_hash, status_riga")
-        .in("pratica_id", blocco);
-      if (error) throw error;
-      for (const r of data ?? []) mappaRigheEsistenti.set(`${r.pratica_id}|${r.codice_articolo}|${r.descrizione}`, r);
+      const righeEsistenti = await selezionaTutto(() =>
+        supabase
+          .from("pratica_righe")
+          .select("id, pratica_id, codice_articolo, descrizione, riga_hash, status_riga")
+          .in("pratica_id", blocco)
+          .order("id", { ascending: true })
+      );
+      for (const r of righeEsistenti) mappaRigheEsistenti.set(`${r.pratica_id}|${r.codice_articolo}|${r.descrizione}`, r);
     })
   );
 
@@ -196,13 +226,15 @@ export async function eseguiImportazioneCsv(
   const mappaFasiPerPratica = new Map<string, Map<string, any>>();
   await Promise.all(
     inBlocchi(idPraticheEsistenti).map(async (blocco) => {
-      const { data, error } = await supabase
-        .from("pratica_fasi")
-        .select("id, pratica_id, fase_id, stato")
-        .in("pratica_id", blocco)
-        .in("fase_id", tutteLeFasiRilevanti);
-      if (error) throw error;
-      for (const f of data ?? []) {
+      const fasi = await selezionaTutto(() =>
+        supabase
+          .from("pratica_fasi")
+          .select("id, pratica_id, fase_id, stato")
+          .in("pratica_id", blocco)
+          .in("fase_id", tutteLeFasiRilevanti)
+          .order("id", { ascending: true })
+      );
+      for (const f of fasi) {
         if (!mappaFasiPerPratica.has(f.pratica_id)) mappaFasiPerPratica.set(f.pratica_id, new Map());
         mappaFasiPerPratica.get(f.pratica_id)!.set(f.fase_id, f);
       }
@@ -358,13 +390,15 @@ export async function eseguiImportazioneCsv(
     await Promise.all(
       inBlocchi(idNuovePratiche).map(async (blocco) => {
         if (blocco.length === 0) return;
-        const { data, error } = await supabase
-          .from("pratica_fasi")
-          .select("id, pratica_id, fase_id, stato")
-          .in("pratica_id", blocco)
-          .in("fase_id", [fasiIds.pianificazione_consegna, fasiIds.pagamento]);
-        if (error) throw error;
-        for (const f of data ?? []) {
+        const fasi = await selezionaTutto(() =>
+          supabase
+            .from("pratica_fasi")
+            .select("id, pratica_id, fase_id, stato")
+            .in("pratica_id", blocco)
+            .in("fase_id", [fasiIds.pianificazione_consegna, fasiIds.pagamento])
+            .order("id", { ascending: true })
+        );
+        for (const f of fasi) {
           if (!mappaFasiNuovePratiche.has(f.pratica_id)) mappaFasiNuovePratiche.set(f.pratica_id, new Map());
           mappaFasiNuovePratiche.get(f.pratica_id)!.set(f.fase_id, f);
         }
