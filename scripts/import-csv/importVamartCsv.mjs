@@ -411,12 +411,39 @@ try {
 const praticaEsistente = mappaPraticheEsistenti.get(pratica.codice_commissione);
 const praticaId = praticaEsistente.id;
 
+// Campi della pratica che possono cambiare su un import successivo al
+// primo. Finora si guardava solo stato_generale: per le pratiche di
+// "consegna" pero' anche data_consegna_prevista puo' cambiare nel tempo su
+// Vamart (l'operatore sposta la data), e va tenuta allineata, altrimenti
+// resta congelata al valore letto la prima volta che la pratica e' stata
+// creata (bug segnalato: la dashboard Monitor Consegne non si accorge mai
+// degli spostamenti di data).
+const aggiornamentiPratica = {};
 if (praticaEsistente.stato_generale !== pratica.stato_generale) {
-await supabase.from("pratiche").update({ stato_generale: pratica.stato_generale }).eq("id", praticaId);
+aggiornamentiPratica.stato_generale = pratica.stato_generale;
+}
+if (
+praticaEsistente.tipo === "consegna" &&
+pratica.data_consegna_cliente &&
+praticaEsistente.data_consegna_prevista !== pratica.data_consegna_cliente
+) {
+aggiornamentiPratica.data_consegna_prevista = pratica.data_consegna_cliente;
+}
+
+if (Object.keys(aggiornamentiPratica).length > 0) {
+await supabase.from("pratiche").update(aggiornamentiPratica).eq("id", praticaId);
+if (aggiornamentiPratica.stato_generale) {
 storicoPraticheDaInserire.push({
 entita: "pratica", entita_id: praticaId, campo: "stato_generale",
-valore_precedente: praticaEsistente.stato_generale, valore_nuovo: pratica.stato_generale, origine: "importazione_csv",
+valore_precedente: praticaEsistente.stato_generale, valore_nuovo: aggiornamentiPratica.stato_generale, origine: "importazione_csv",
 });
+}
+if (aggiornamentiPratica.data_consegna_prevista) {
+storicoPraticheDaInserire.push({
+entita: "pratica", entita_id: praticaId, campo: "data_consegna_prevista",
+valore_precedente: praticaEsistente.data_consegna_prevista, valore_nuovo: aggiornamentiPratica.data_consegna_prevista, origine: "importazione_csv",
+});
+}
 aggiornate++;
 } else {
 invariate++;
@@ -435,7 +462,7 @@ aggiornamentiRiga.push({ id: rigaEsistente.id, payload, statoPrecedente: rigaEsi
 
 const fasiDiQuestaPratica = mappaFasiPerPratica.get(praticaId) ?? new Map();
 if (praticaEsistente.tipo === "consegna") {
-await sincronizzaFasiConsegna(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
+await sincronizzaFasiConsegna(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica, pratica.data_consegna_cliente);
 } else {
 await completaFasiPregresseAssistenza(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica);
 await sincronizzaFasiAssistenza(supabase, praticaId, pratica.righe, fasiIds, fasiDiQuestaPratica, richiedeConsegna, slaOreConfermaOrdine);
@@ -510,7 +537,7 @@ await eseguiConConcorrenza(praticheDaCreare, CONCORRENZA_PRATICHE, async (p) => 
 const praticaId = mappaNuovePratiche.get(p.codice_commissione);
 if (!praticaId) return;
 const fasiDiQuestaPratica = mappaFasiNuovePratiche.get(praticaId) ?? new Map();
-await sincronizzaFasiConsegna(supabase, praticaId, p.righe, fasiIds, fasiDiQuestaPratica);
+await sincronizzaFasiConsegna(supabase, praticaId, p.righe, fasiIds, fasiDiQuestaPratica, p.data_consegna_cliente);
 });
 }
 
@@ -740,8 +767,26 @@ await supabase
 // scritto dal chiamante prima di questa funzione): la pratica sparisce dal
 // monitor come qualunque altra pratica chiusa, nessuna azione qui.
 // ---------------------------------------------------------------------
-async function sincronizzaFasiConsegna(supabase, praticaId, righe, fasiIds, perFase) {
+async function sincronizzaFasiConsegna(supabase, praticaId, righe, fasiIds, perFase, dataConsegnaPrevista) {
 if (!righe || righe.length === 0) return;
+
+// Riallinea la scadenza delle fasi ancora aperte alla vera data di
+// consegna (quella che l'operatore vede/sposta su Vamart). Senza questo,
+// pratica_fasi.data_prevista resta congelata alla stima fatta dal trigger
+// DB alla creazione della pratica (now() + SLA ore, vedi
+// trg_fn_inizializza_fasi_pratica in 0010_modulo_consegne.sql) e non
+// riflette mai gli spostamenti di data: e' la causa del bug per cui una
+// pratica di consegna non "sparisce"/non cambia mai posizione nel Monitor
+// Consegne anche dopo aver spostato la data di consegna.
+if (dataConsegnaPrevista) {
+const idFasiDaRiallineare = [fasiIds.pianificazione_consegna, fasiIds.pagamento]
+.map((faseId) => perFase.get(faseId))
+.filter((f) => f && f.stato !== "completata")
+.map((f) => f.id);
+if (idFasiDaRiallineare.length > 0) {
+await supabase.from("pratica_fasi").update({ data_prevista: dataConsegnaPrevista }).in("id", idFasiDaRiallineare);
+}
+}
 
 const tutteArrivate = righe.every((r) => STATI_ARRIVATO_O_OLTRE.has(r.status));
 if (!tutteArrivate) return;
