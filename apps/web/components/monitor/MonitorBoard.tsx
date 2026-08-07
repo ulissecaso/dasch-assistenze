@@ -60,6 +60,33 @@ export type AvvisoImportazioneMonitor = {
   quando: string;
 };
 
+/** Una riga del modal "vedi le pratiche" che si apre cliccando una card
+ *  statistica (vedi apriDettaglioMetrica più sotto). A differenza di
+ *  AlertRigaMonitor, che arriva già filtrata dal chiamante (un solo tipo di
+ *  pratica, a volte un solo brand), queste righe arrivano SEMPRE da
+ *  /api/monitor/dettaglio-metrica, che le carica su entrambi i moduli
+ *  (assistenza + consegna) e su tutti i brand: le card sono un indicatore di
+ *  salute generale, non della sola board che le mostra in questo momento. */
+export type RigaDettaglioMetrica = {
+  praticaId: string;
+  codice: string;
+  cliente: string;
+  tipo: "assistenza" | "consegna";
+  brand?: { codice: string; nome: string; colore: string };
+  operatoreNome: string;
+  motivo: string;
+  data: string;
+};
+
+const ETICHETTA_METRICA: Record<keyof StatsMonitor, string> = {
+  allertTotali: "Allert totali",
+  allertUrgenti: "Allert urgenti",
+  scaduti: "Scaduti",
+  inScadenzaOggi: "In scadenza oggi",
+  risoltiOggi: "Risolti oggi",
+  praticheTotali: "Pratiche totali",
+};
+
 const VELOCITA_PULSE: Record<string, string> = {
   critica: "0.9s", alta: "1.5s", media: "2.2s", bassa: "3s",
 };
@@ -131,6 +158,40 @@ export default function MonitorBoard({
   const boardRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
+  // Modal "vedi le pratiche" aperto da una card statistica (SCADUTI, IN
+  // SCADENZA OGGI, ecc.): vedi apriDettaglioMetrica. Disponibile solo dove le
+  // righe della tabella sono già cliccabili (righeCliccabili) - il monitor
+  // pubblico a parete non deve avere nessun link verso il resto del portale,
+  // quindi lì le card restano semplici numeri, non cliccabili.
+  const [metricaAperta, setMetricaAperta] = useState<keyof StatsMonitor | null>(null);
+  const [dettaglioRighe, setDettaglioRighe] = useState<RigaDettaglioMetrica[] | null>(null);
+  const [dettaglioCaricamento, setDettaglioCaricamento] = useState(false);
+  const [dettaglioErrore, setDettaglioErrore] = useState<string | null>(null);
+
+  async function apriDettaglioMetrica(metrica: keyof StatsMonitor) {
+    if (!righeCliccabili) return;
+    setMetricaAperta(metrica);
+    setDettaglioRighe(null);
+    setDettaglioErrore(null);
+    setDettaglioCaricamento(true);
+    try {
+      const resp = await fetch(`/api/monitor/dettaglio-metrica?metrica=${metrica}`);
+      if (!resp.ok) throw new Error(`Richiesta fallita (${resp.status})`);
+      const corpo = await resp.json();
+      setDettaglioRighe(corpo.righe ?? []);
+    } catch {
+      setDettaglioErrore("Non è stato possibile caricare l'elenco. Riprova.");
+    } finally {
+      setDettaglioCaricamento(false);
+    }
+  }
+
+  function chiudiDettaglioMetrica() {
+    setMetricaAperta(null);
+    setDettaglioRighe(null);
+    setDettaglioErrore(null);
+  }
+
   // Elenco dei brand da offrire nel filtro: partiamo dalla lista che passa il
   // chiamante (brandsAttivi), cosi' i pulsanti compaiono anche quando in
   // questo momento le righe visibili sono di un solo brand, MA la
@@ -170,6 +231,15 @@ export default function MonitorBoard({
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (!metricaAperta) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") chiudiDettaglioMetrica();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [metricaAperta]);
 
   async function toggleKiosk() {
     try {
@@ -386,13 +456,96 @@ export default function MonitorBoard({
         </div>
 
         <div className="mon-stats">
-          <div className="mon-stat"><div className="lbl" style={{ color: "#f87171" }}><Icona nome="bell" className="ic ic-bell" /> ALLERT TOTALI</div><div className="val">{statsMostrate.allertTotali} <small>di cui {statsMostrate.allertUrgenti} urgenti</small></div></div>
-          <div className="mon-stat"><div className="lbl" style={{ color: "#fb923c" }}><Icona nome="clock" className="ic" /> SCADUTI</div><div className="val">{stats.scaduti} <small>da gestire</small></div></div>
-          <div className="mon-stat"><div className="lbl" style={{ color: "#facc15" }}><Icona nome="alert-circle" className="ic" /> IN SCADENZA OGGI</div><div className="val">{stats.inScadenzaOggi}</div></div>
-          <div className="mon-stat"><div className="lbl" style={{ color: "#60a5fa" }}><Icona nome="check-circle" className="ic" /> RISOLTI OGGI</div><div className="val">{stats.risoltiOggi}</div></div>
-          <div className="mon-stat"><div className="lbl" style={{ color: "#4ade80" }}><Icona nome="calendar" className="ic" /> PRATICHE TOTALI</div><div className="val">{stats.praticheTotali} <small>aperte</small></div></div>
+          <div
+            className={`mon-stat${righeCliccabili ? " cliccabile" : ""}`}
+            onClick={() => apriDettaglioMetrica("allertTotali")}
+            title={righeCliccabili ? "Vedi le pratiche" : undefined}
+          >
+            <div className="lbl" style={{ color: "#f87171" }}><Icona nome="bell" className="ic ic-bell" /> ALLERT TOTALI</div>
+            <div className="val">{statsMostrate.allertTotali} <small>di cui {statsMostrate.allertUrgenti} urgenti</small></div>
+          </div>
+          <div
+            className={`mon-stat${righeCliccabili ? " cliccabile" : ""}`}
+            onClick={() => apriDettaglioMetrica("scaduti")}
+            title={righeCliccabili ? "Vedi le pratiche" : undefined}
+          >
+            <div className="lbl" style={{ color: "#fb923c" }}><Icona nome="clock" className="ic" /> SCADUTI</div>
+            <div className="val">{stats.scaduti} <small>da gestire</small></div>
+          </div>
+          <div
+            className={`mon-stat${righeCliccabili ? " cliccabile" : ""}`}
+            onClick={() => apriDettaglioMetrica("inScadenzaOggi")}
+            title={righeCliccabili ? "Vedi le pratiche" : undefined}
+          >
+            <div className="lbl" style={{ color: "#facc15" }}><Icona nome="alert-circle" className="ic" /> IN SCADENZA OGGI</div>
+            <div className="val">{stats.inScadenzaOggi}</div>
+          </div>
+          <div
+            className={`mon-stat${righeCliccabili ? " cliccabile" : ""}`}
+            onClick={() => apriDettaglioMetrica("risoltiOggi")}
+            title={righeCliccabili ? "Vedi le pratiche" : undefined}
+          >
+            <div className="lbl" style={{ color: "#60a5fa" }}><Icona nome="check-circle" className="ic" /> RISOLTI OGGI</div>
+            <div className="val">{stats.risoltiOggi}</div>
+          </div>
+          <div
+            className={`mon-stat${righeCliccabili ? " cliccabile" : ""}`}
+            onClick={() => apriDettaglioMetrica("praticheTotali")}
+            title={righeCliccabili ? "Vedi le pratiche" : undefined}
+          >
+            <div className="lbl" style={{ color: "#4ade80" }}><Icona nome="calendar" className="ic" /> PRATICHE TOTALI</div>
+            <div className="val">{stats.praticheTotali} <small>aperte</small></div>
+          </div>
         </div>
       </div>
+
+      {metricaAperta && (
+        <div className="mon-dettaglio-backdrop" onClick={chiudiDettaglioMetrica}>
+          <div className="mon-dettaglio-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mon-dettaglio-head">
+              <h2>{ETICHETTA_METRICA[metricaAperta]}</h2>
+              <button className="mon-dettaglio-chiudi" onClick={chiudiDettaglioMetrica} aria-label="Chiudi">✕</button>
+            </div>
+            <div className="mon-dettaglio-body">
+              {dettaglioCaricamento && <p className="mon-dettaglio-msg">Caricamento…</p>}
+              {dettaglioErrore && <p className="mon-dettaglio-msg mon-dettaglio-msg-errore">{dettaglioErrore}</p>}
+              {!dettaglioCaricamento && !dettaglioErrore && dettaglioRighe && dettaglioRighe.length === 0 && (
+                <p className="mon-dettaglio-msg">Nessuna pratica in questa categoria al momento.</p>
+              )}
+              {!dettaglioCaricamento && !dettaglioErrore && dettaglioRighe && dettaglioRighe.length > 0 && (
+                <table className="mon-dettaglio-table">
+                  <thead>
+                    <tr>
+                      <th>Pratica</th><th>Modulo</th><th>Cliente</th><th>Motivo</th><th>Data</th><th>Operatore</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dettaglioRighe.map((r) => (
+                      <tr
+                        key={r.praticaId}
+                        onClick={() => {
+                          chiudiDettaglioMetrica();
+                          router.push(`/pratiche/${r.praticaId}`);
+                        }}
+                      >
+                        <td>
+                          {r.brand && <span className="mon-brand-dot" style={{ background: r.brand.colore }} title={r.brand.nome} />}
+                          {r.codice}
+                        </td>
+                        <td><span className={`mon-tipo-badge mon-tipo-${r.tipo}`}>{r.tipo === "assistenza" ? "Assistenza" : "Consegna"}</span></td>
+                        <td>{r.cliente}</td>
+                        <td>{r.motivo}</td>
+                        <td>{r.data}</td>
+                        <td>{r.operatoreNome}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -458,6 +611,27 @@ const CSS = `
 .mon-stat .lbl{display:flex;align-items:center;gap:10px;font-size:12px;font-weight:700;letter-spacing:.4px;margin-bottom:6px;}
 .mon-stat .val{color:#fff;font-size:24px;font-weight:700;}
 .mon-stat .val small{font-size:12.5px;font-weight:500;color:#8b96a8;margin-left:4px;}
+.mon-stat.cliccabile{cursor:pointer;transition:border-color .15s,background .15s,transform .1s;}
+.mon-stat.cliccabile:hover{border-color:#3b4658;background:#141b29;}
+.mon-stat.cliccabile:active{transform:scale(.98);}
+.mon-dettaglio-backdrop{position:fixed;inset:0;background:rgba(5,8,14,.72);display:flex;align-items:center;justify-content:center;z-index:1000;padding:24px;}
+.mon-dettaglio-panel{background:#0f1420;border:1px solid #1e2634;border-radius:14px;width:100%;max-width:920px;max-height:min(80vh,720px);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);}
+.mon-dettaglio-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #1e2634;flex-shrink:0;}
+.mon-dettaglio-head h2{margin:0;font-size:17px;font-weight:700;color:#fff;}
+.mon-dettaglio-chiudi{background:transparent;border:none;color:#8b96a8;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1;}
+.mon-dettaglio-chiudi:hover{background:#1e2634;color:#fff;}
+.mon-dettaglio-body{overflow-y:auto;padding:8px 0;}
+.mon-dettaglio-msg{padding:32px 20px;text-align:center;color:#8b96a8;font-size:14px;}
+.mon-dettaglio-msg-errore{color:#f87171;}
+.mon-dettaglio-table{width:100%;border-collapse:collapse;font-size:13.5px;}
+.mon-dettaglio-table thead th{position:sticky;top:0;background:#0f1420;text-align:left;padding:8px 20px;color:#8b96a8;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;border-bottom:1px solid #1e2634;}
+.mon-dettaglio-table tbody tr{cursor:pointer;border-bottom:1px solid #161c28;}
+.mon-dettaglio-table tbody tr:hover{background:#141b29;}
+.mon-dettaglio-table td{padding:10px 20px;color:#cbd5e1;white-space:nowrap;}
+.mon-dettaglio-table td:nth-child(3),.mon-dettaglio-table td:nth-child(4){white-space:normal;}
+.mon-tipo-badge{display:inline-flex;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.2px;}
+.mon-tipo-badge.mon-tipo-assistenza{background:#132a3a;color:#60a5fa;}
+.mon-tipo-badge.mon-tipo-consegna{background:#123420;color:#4ade80;}
 .ic{display:inline-flex;width:18px;height:18px;vertical-align:middle;flex-shrink:0;}
 .mon-stat .lbl .ic{width:44px;height:44px;}
 .mon-stat .lbl .ic-bell{width:49px;height:49px;}
